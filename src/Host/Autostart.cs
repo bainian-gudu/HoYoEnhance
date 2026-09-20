@@ -119,10 +119,14 @@ internal static class Autostart
             }
             else if (existing is not null)
             {
-                // 防御：仅删除含本产品名的值，避免误删同名异常值
-                if (!existing.Contains(AppPaths.ProductName, StringComparison.OrdinalIgnoreCase))
+                // 防御：只删除指向本程序（当前或历史 exe 名）的值，避免误删同名异常值。
+                // 不能按命令行里是否含旧产品名判断：品牌改名后命令行是
+                // "C:\Program Files\HoYoEnhance\HoYoEnhance.exe" --autostart，
+                // 不含旧名，旧判断会拒绝删除，导致 HKCU\Run 与计划任务并存、
+                // 登录时被拉起两个实例。
+                if (!IsOwnRunValue(existing))
                 {
-                    AppLog.Warn("autostart 值不含本产品名，跳过删除: " + existing);
+                    AppLog.Warn("autostart 值不是本程序，跳过删除: " + existing);
                     return;
                 }
 
@@ -552,5 +556,18 @@ internal static class Autostart
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Run 值是否指向本程序：按解析出的 exe 文件名匹配当前名或历史名。
+    /// 品牌改名后不能再按旧产品名字符串判断。
+    /// </summary>
+    internal static bool IsOwnRunValue(string? command)
+    {
+        var target = ParseTarget(command);
+        if (target is null) return false;
+        var name = Path.GetFileName(target);
+        return string.Equals(name, AppPaths.ExecutableFileName, StringComparison.OrdinalIgnoreCase)
+               || string.Equals(name, AppPaths.LegacyExecutableFileName, StringComparison.OrdinalIgnoreCase);
     }
 }

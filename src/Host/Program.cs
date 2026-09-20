@@ -204,12 +204,20 @@ internal static class Program
         }
         if (!acquired)
         {
-            AppLog.Warn("已有实例在运行 — 尝试唤醒主实例后退出" +
-                        (isAutostart ? "（autostart launch 放弃二次启动，主实例仍在工作）" : ""));
-            // 快捷方式二次点击：唤醒已有进程主窗，不再弹「已在运行」阻塞框
+            // 只有用户手动二次启动才唤醒主窗。登录自启 / 提权交接的重复实例必须
+            // 静默退出：否则计划任务与 HKCU\Run 同时拉起两个实例时，后到的那个会把
+            // 「启动进托盘」的主窗弹出来。
+            var wakeExisting = !isAutostart && !elevatedHandoff;
+            AppLog.Warn(wakeExisting
+                ? "已有实例在运行 — 尝试唤醒主实例后退出"
+                : "已有实例在运行 — 静默退出（不唤醒主窗）"
+                  + (isAutostart ? "（autostart launch 放弃二次启动，主实例仍在工作）" : ""));
             var signaled = false;
-            try { signaled = InstanceWake.TrySignal(); } catch { /* ignore */ }
-            if (!signaled && !quiet && !isAutostart)
+            if (wakeExisting)
+            {
+                try { signaled = InstanceWake.TrySignal(); } catch { /* ignore */ }
+            }
+            if (!signaled && !quiet && !isAutostart && !elevatedHandoff)
             {
                 MessageBox.Show(
                     "程序已在运行。\n\n" +
