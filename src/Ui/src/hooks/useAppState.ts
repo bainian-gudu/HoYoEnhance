@@ -81,6 +81,9 @@ export function useAppState() {
   const patchTimer = useRef<number | null>(null);
   // 待下发的 patch：共享字段直接放顶层，游戏字段收进 games[game]。
   const pendingPatch = useRef<Record<string, unknown>>({});
+  // 用户最近一次手动切换游戏的目标与时间：宿主在收到 patch 前推送的旧状态
+  // 不能把它覆盖回去。2 秒保护窗覆盖 80ms 节流 + IPC 往返。
+  const localGameOverride = useRef<{ game: GameId; at: number } | null>(null);
 
   const addLog = useCallback((level: LogLevel, message: string, game?: GameId) => {
     setLogs((previous) => [...previous, makeLog(level, message, game)].slice(-200));
@@ -97,14 +100,27 @@ export function useAppState() {
   }, []);
 
   const applyNativeState = useCallback((state: NativeState) => {
-    // 本地还有没下发的 activeGame 时，不让宿主状态把刚做的选择覆盖掉；
+    // 用户刚手动切过游戏时，宿主在收到 patch 之前推送的旧状态不能把选择覆盖回去。
+    // pendingPatch 覆盖「还没下发」阶段，localGameOverride 覆盖「已下发、等响应」阶段；
     // 其余字段仍以宿主为准。
     const pendingGame = pendingPatch.current.activeGame;
-    const keepLocalGame = typeof pendingGame === 'string' && isGameId(pendingGame);
+    const pendingChoice = typeof pendingGame === 'string' && isGameId(pendingGame) ? pendingGame : null;
+    const override = localGameOverride.current;
+    const overrideChoice = override && Date.now() - override.at < 2000 ? override.game : null;
+    if (override && overrideChoice === null) localGameOverride.current = null;
+    const localChoice = pendingChoice ?? overrideChoice;
+
+    // 宿主已经按这次选择更新（持久选择与展示都一致）→ 保护结束，正常采用宿主状态。
+    const hostAccepted = localChoice !== null
+      && state.config.activeGame === localChoice
+      && state.displayGame === localChoice;
+    if (hostAccepted && overrideChoice) localGameOverride.current = null;
+
+    const keepLocalGame = localChoice !== null && !hostAccepted;
     setConfig(keepLocalGame
       ? (previous) => ({ ...state.config, activeGame: previous.activeGame })
       : state.config);
-    setDisplayGame(keepLocalGame ? pendingGame as GameId : state.displayGame);
+    setDisplayGame(keepLocalGame && localChoice !== null ? localChoice : state.displayGame);
     setSaveState(state.saveState);
     setStatusText(state.statusText || '就绪');
     setRunningGame(state.runningGame ?? null);
@@ -388,6 +404,7 @@ export function useAppState() {
   /** 切换当前游戏：写入配置并同步一次日志与标题。 */
   function setGame(game: GameId) {
     if (displayGameRef.current === game && configRef.current.activeGame === game) return;
+    localGameOverride.current = { game, at: Date.now() };
     // 切到正在运行的游戏属于临时查看：只换展示，不覆盖用户保存的当前游戏。
     // 宿主侧会再判一次，这里同步处理是为了避免界面先闪成错误的持久选择。
     const temporaryView = runningGame === game;

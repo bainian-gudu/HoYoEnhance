@@ -494,22 +494,21 @@ internal sealed partial class UnlockService
     }
 
     /// <summary>
-    /// 记录当前运行的游戏进程。只有出现新的 PID 才推进运行会话号，
-    /// 同一进程在检测抖动中短暂消失再出现时不会重复触发托盘的自动跟随。
+    /// 记录当前运行的游戏进程。运行会话号由 <see cref="RunningSessionTracker"/>
+    /// 维护：同一进程的检测抖动不重复触发跟随，长时间后的 PID 复用仍算新会话。
     /// </summary>
     private void SetRunning(GameId game, int pid)
     {
-        if (pid != 0 && pid != Volatile.Read(ref _lastSeenGamePid))
-        {
-            Volatile.Write(ref _lastSeenGamePid, pid);
-            Interlocked.Increment(ref _runningSession);
-        }
+        var flickerWindowMs = Math.Clamp(_config.PollIntervalMs * 3, 3000, 15000);
+        _runningSessions.Observe(
+            game, pid, DateTime.UtcNow.Ticks, TimeSpan.FromMilliseconds(flickerWindowMs).Ticks);
         Volatile.Write(ref _runningGameValue, EncodeGame(game));
     }
 
     /// <summary>清除运行状态；保留运行会话号与最后见到的 PID，供托盘判定抖动。</summary>
     private void ClearRunning()
     {
+        _runningSessions.Clear(DateTime.UtcNow.Ticks);
         Volatile.Write(ref _runningGameValue, 0);
     }
 

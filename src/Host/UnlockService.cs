@@ -62,12 +62,10 @@ internal sealed partial class UnlockService : IDisposable
     /// </summary>
     private int _displayGameValue;
     /// <summary>
-    /// 运行会话号：每次出现一个新的游戏进程 PID 时 +1。托盘的自动跟随只在
-    /// 会话号变化时发生一次，运行状态的短暂抖动不会重复触发跟随。
+    /// 运行会话号跟踪：新游戏进程出现时 +1，同一进程的检测抖动不重复触发跟随，
+    /// 长时间后的 PID 复用仍会被识别为新会话。
     /// </summary>
-    private int _runningSession;
-    /// <summary>最后一次见到的游戏进程 PID，用来判断是否是新启动的进程。</summary>
-    private int _lastSeenGamePid;
+    private readonly RunningSessionTracker _runningSessions = new();
     /// <summary>
     /// 共享内存当前属于哪款游戏的 Stub（注入时确定）。映射只有一个槽位，
     /// 属于 A 游戏时不能再拿 B 游戏的档案去写它，否则会把 A 的目标帧率 / 开关冲掉。
@@ -108,7 +106,7 @@ internal sealed partial class UnlockService : IDisposable
     /// </summary>
     public GameId DisplayGame => (GameId)Volatile.Read(ref _displayGameValue);
     /// <summary>运行会话号：新游戏进程启动时 +1，用于托盘只跟随一次。</summary>
-    public int RunningSession => Volatile.Read(ref _runningSession);
+    public int RunningSession => _runningSessions.Session;
     public IpcStatus StubStatus => _ipc.Read().Status;
     public int CurrentFpsFeedback => _ipc.Read().CurrentFps;
 

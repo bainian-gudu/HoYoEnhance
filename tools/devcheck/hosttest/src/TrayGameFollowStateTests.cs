@@ -2,13 +2,13 @@ namespace GenshinFpsUnlocker.Host.Tests;
 
 /// <summary>
 /// 托盘自动跟随的回归断言：重点是「手动切回原神后再切回正在运行的星铁，
-/// 星铁退出时仍回到原神」这条真实反馈过的路径。
+/// 星铁退出时仍回到原神」，以及退出确认对运行状态抖动的防护。
 /// </summary>
 internal static class TrayGameFollowStateTests
 {
     public static void Run(Harness h)
     {
-        h.Case("星铁启动自动跟随，退出回到原神", () =>
+        h.Case("星铁启动自动跟随，确认退出后回到原神", () =>
         {
             var state = new TrayGameFollowState();
 
@@ -17,8 +17,12 @@ internal static class TrayGameFollowStateTests
             Harness.Equal(GameId.StarRail, follow.Game, "跟随目标");
             Harness.True(follow.IsFollow, "应标记为跟随");
 
-            var restore = state.Update(1, null, GameId.StarRail);
-            Harness.True(restore.Switch, "星铁退出应回退");
+            var pending = state.Update(1, null, GameId.StarRail);
+            Harness.True(pending.NeedsExitConfirm, "运行状态变为空时应先等待退出确认");
+            Harness.False(pending.Switch, "确认前不能立即回退");
+
+            var restore = state.ConfirmExit(null, GameId.StarRail);
+            Harness.True(restore.Switch, "确认退出后应回退");
             Harness.Equal(GameId.Genshin, restore.Game, "回退目标");
             Harness.True(restore.IsRestore, "应标记为回退");
         });
@@ -37,8 +41,11 @@ internal static class TrayGameFollowStateTests
             var viewStarRail = state.Update(1, GameId.StarRail, GameId.StarRail);
             Harness.False(viewStarRail.Switch, "展示已经是星铁时无需额外切换");
 
-            var restore = state.Update(1, null, GameId.StarRail);
-            Harness.True(restore.Switch, "星铁退出应回退");
+            var pending = state.Update(1, null, GameId.StarRail);
+            Harness.True(pending.NeedsExitConfirm, "星铁退出应进入确认");
+
+            var restore = state.ConfirmExit(null, GameId.StarRail);
+            Harness.True(restore.Switch, "确认退出后应回退");
             Harness.Equal(GameId.Genshin, restore.Game, "应回到自动跟随前的原神");
             Harness.True(restore.IsRestore, "应标记为回退");
         });
@@ -48,8 +55,27 @@ internal static class TrayGameFollowStateTests
             var state = new TrayGameFollowState();
             state.Update(1, GameId.StarRail, GameId.Genshin);
 
-            var exited = state.Update(1, null, GameId.Genshin);
-            Harness.False(exited.Switch, "已经停在原神上，退出时不需要再切换");
+            var pending = state.Update(1, null, GameId.Genshin);
+            Harness.True(pending.NeedsExitConfirm, "运行状态变为空仍会进入确认");
+
+            var exited = state.ConfirmExit(null, GameId.Genshin);
+            Harness.False(exited.Switch, "已经停在原神上，确认后不需要切换");
+        });
+
+        h.Case("退出确认期间运行恢复，不误回退", () =>
+        {
+            var state = new TrayGameFollowState();
+            state.Update(1, GameId.StarRail, GameId.Genshin);
+
+            var pending = state.Update(1, null, GameId.StarRail);
+            Harness.True(pending.NeedsExitConfirm, "首次报告无进程应等待确认");
+
+            // 监视循环下一轮又检测到同一进程：确认作废，不回退。
+            var resumed = state.Update(1, GameId.StarRail, GameId.StarRail);
+            Harness.False(resumed.Switch, "运行恢复时不应切换");
+
+            var confirm = state.ConfirmExit(GameId.StarRail, GameId.StarRail);
+            Harness.False(confirm.Switch, "运行已恢复，确认退出不能回退");
         });
 
         h.Case("同一进程会话的状态抖动不会重复跟随", () =>
@@ -57,12 +83,15 @@ internal static class TrayGameFollowStateTests
             var state = new TrayGameFollowState();
             state.Update(1, GameId.StarRail, GameId.Genshin);
 
-            // 监视循环偶尔短暂报告无进程：不能因此再次触发跟随。
+            // 监视循环偶尔短暂报告无进程：先进入确认，不立即回退。
             var flicker = state.Update(1, null, GameId.Genshin);
-            Harness.False(flicker.Switch, "抖动时已经停在原神上，不应切换");
+            Harness.True(flicker.NeedsExitConfirm, "抖动应进入退出确认");
 
             var resumed = state.Update(1, GameId.StarRail, GameId.Genshin);
             Harness.False(resumed.Switch, "同一进程会话恢复后不应重复跟随");
+            Harness.False(
+                state.ConfirmExit(GameId.StarRail, GameId.Genshin).Switch,
+                "运行恢复后确认退出不应切换");
         });
 
         h.Case("用户本来就选着星铁，退出不改变选择", () =>
@@ -72,6 +101,7 @@ internal static class TrayGameFollowStateTests
             Harness.False(follow.Switch, "展示已经是星铁，不需要跟随");
 
             var exited = state.Update(1, null, GameId.StarRail);
+            Harness.False(exited.NeedsExitConfirm, "没有发生自动跟随时不应进入退出确认");
             Harness.False(exited.Switch, "没有发生自动跟随时不应改变用户选择");
         });
 
@@ -80,11 +110,46 @@ internal static class TrayGameFollowStateTests
             var state = new TrayGameFollowState();
             state.Update(1, GameId.StarRail, GameId.Genshin);
             state.Update(1, null, GameId.StarRail);
+            state.ConfirmExit(null, GameId.StarRail);
 
             var second = state.Update(2, GameId.StarRail, GameId.Genshin);
             Harness.True(second.Switch, "新的星铁进程应再次跟随");
             Harness.Equal(GameId.StarRail, second.Game, "跟随目标");
             Harness.True(second.IsFollow, "应标记为跟随");
+        });
+
+        h.Case("新进程换成另一款游戏时旧跟随关系作废", () =>
+        {
+            var state = new TrayGameFollowState();
+            state.Update(1, GameId.StarRail, GameId.Genshin);
+            state.Update(1, null, GameId.StarRail);
+            state.ConfirmExit(null, GameId.StarRail);
+
+            // 原神启动：展示已经是原神，不需要跟随，旧的星铁跟随关系应作废。
+            var genshinStart = state.Update(2, GameId.Genshin, GameId.Genshin);
+            Harness.False(genshinStart.Switch, "展示已经是原神，不需要跟随");
+
+            var genshinExit = state.Update(2, null, GameId.Genshin);
+            Harness.False(genshinExit.NeedsExitConfirm, "旧跟随关系已作废，不应进入退出确认");
+            Harness.False(genshinExit.Switch, "用户选择就是原神，退出后保持不动");
+        });
+
+        h.Case("星铁重启时保留跟随关系，退出仍回原神", () =>
+        {
+            var state = new TrayGameFollowState();
+            state.Update(1, GameId.StarRail, GameId.Genshin);
+            // 用户手动切到运行中的星铁：临时查看，跟随关系仍在。
+            state.Update(1, GameId.StarRail, GameId.StarRail);
+
+            var restart = state.Update(2, GameId.StarRail, GameId.StarRail);
+            Harness.False(restart.Switch, "重启后展示已经是星铁");
+
+            var pending = state.Update(2, null, GameId.StarRail);
+            Harness.True(pending.NeedsExitConfirm, "重启后的星铁退出仍应进入确认");
+
+            var restore = state.ConfirmExit(null, GameId.StarRail);
+            Harness.True(restore.Switch, "确认后应回退");
+            Harness.Equal(GameId.Genshin, restore.Game, "应回到自动跟随前的原神");
         });
     }
 }

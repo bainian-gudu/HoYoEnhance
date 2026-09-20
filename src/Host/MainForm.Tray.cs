@@ -28,6 +28,8 @@ internal sealed partial class MainForm
     private GameId? _trayFpsBuiltFor;
     /// <summary>托盘自动跟随的纯状态机（启动跟随一次、退出回退，手动查看不打断回退）。</summary>
     private readonly TrayGameFollowState _trayFollow = new();
+    /// <summary>退出确认定时器：运行状态短暂抖动时不立即回退。</summary>
+    private System.Windows.Forms.Timer? _trayFollowExitTimer;
     /// <summary>主窗是否已藏入托盘（气泡/提示文案用）。</summary>
     private bool _inTray;
 
@@ -58,7 +60,7 @@ internal sealed partial class MainForm
     /// <summary>
     /// 托盘热切换：游戏进程启动的那一下自动切到它（菜单、提示、界面一起换），
     /// 游戏退出后回到启动前展示的那款（默认原神）。跟随只认运行会话号，
-    /// 运行状态的短暂抖动不会重复触发，也不会把界面反复拽回正在注入的那款；
+    /// 运行状态的短暂抖动不会重复触发、也不会误触发退出回退；
     /// 用户中途手动查看哪款都不改变「退出后回到跟随前游戏」这个目标。
     /// 跟随只改展示游戏（<see cref="UnlockService.DisplayGame"/>），不覆盖用户选择。
     /// </summary>
@@ -66,10 +68,49 @@ internal sealed partial class MainForm
     {
         if (IsDisposed) return;
 
+        // 运行状态用「正在运行的游戏 → 已附着的游戏」兜底：监视循环短暂读不到
+        // 进程但 Stub 仍附着时，不能当成退出把托盘切回启动前的游戏。
+        var running = _service.RunningGame ?? _service.AttachedGame;
         var decision = _trayFollow.Update(
-            _service.RunningSession, _service.RunningGame, _service.DisplayGame);
+            _service.RunningSession, running, _service.DisplayGame);
+        if (decision.NeedsExitConfirm)
+        {
+            ScheduleTrayFollowExitConfirm();
+            return;
+        }
         if (!decision.Switch) return;
 
+        ApplyTrayFollowDecision(decision);
+    }
+
+    /// <summary>运行状态刚变为空：延迟一小段时间再确认，避免单次检测失败误回退。</summary>
+    private void ScheduleTrayFollowExitConfirm()
+    {
+        if (_trayFollowExitTimer is null)
+        {
+            _trayFollowExitTimer = new System.Windows.Forms.Timer();
+            _trayFollowExitTimer.Tick += (_, _) => ConfirmTrayFollowExit();
+        }
+        _trayFollowExitTimer.Stop();
+        // 至少覆盖一轮监视间隔；最长 5 秒，避免游戏真退出后回退太慢。
+        _trayFollowExitTimer.Interval = Math.Clamp(_config.PollIntervalMs * 2, 1000, 5000);
+        _trayFollowExitTimer.Start();
+    }
+
+    private void ConfirmTrayFollowExit()
+    {
+        _trayFollowExitTimer?.Stop();
+        if (IsDisposed || _reallyExit) return;
+
+        var running = _service.RunningGame ?? _service.AttachedGame;
+        var decision = _trayFollow.ConfirmExit(running, _service.DisplayGame);
+        if (!decision.Switch) return;
+
+        ApplyTrayFollowDecision(decision);
+    }
+
+    private void ApplyTrayFollowDecision(TrayGameFollowState.Decision decision)
+    {
         _service.SetDisplayGame(decision.Game);
         AppLog.Info(decision.IsFollow
             ? $"托盘跟随运行中的游戏 → {GameCatalog.Get(decision.Game).Key}"

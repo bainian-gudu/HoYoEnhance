@@ -328,6 +328,7 @@ internal sealed partial class MainForm
             try { _wakeCts?.Cancel(); } catch { /* ignore */ }
             try { _wakeCts?.Dispose(); } catch { /* ignore */ }
             try { _trayRecoveryTimer?.Stop(); _trayRecoveryTimer?.Dispose(); } catch { /* ignore */ }
+            try { _trayFollowExitTimer?.Stop(); _trayFollowExitTimer?.Dispose(); } catch { /* ignore */ }
             try { _service.StateChanged -= OnServiceStateForTray; } catch { /* ignore */ }
             try { _tray.Visible = false; } catch { /* ignore */ }
             try { (_trayMenu?.Renderer as IDisposable)?.Dispose(); } catch { /* ignore */ }
