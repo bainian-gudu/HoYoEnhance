@@ -62,6 +62,8 @@ if (-not $DistDir) { $DistDir = Join-Path $RepoRoot "dist" }
 if (-not $OutDir)  { $OutDir  = Join-Path $RepoRoot "artifacts" }
 if (-not $KiraraRepo) { $KiraraRepo = Join-Path (Split-Path -Parent $RepoRoot) "Kirara" }
 $Builder = if ($BuilderPath) { $BuilderPath } else { Join-Path $KiraraRepo "tools\kirara-builder.exe" }
+# -BuilderPath 给的是现成产物：不再去 Kirara 目录找 build.ps1（CI 里没有 Kirara 检出）
+if ($BuilderPath) { $SkipBuilderBuild = $true }
 
 function Step([string]$msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 function Ok([string]$msg)   { Write-Host "    $msg" -ForegroundColor Green }

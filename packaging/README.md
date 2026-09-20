@@ -304,7 +304,8 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 2. `build-app` —— `build.ps1 -SkipSetup` 产出 `dist\`；随后让刚构建出的宿主导出
    登录计划任务 XML，交给 runner 上的 `schtasks` 真建一次、真删一次。
 3. `pack` —— 下载前两者的产物，执行
-   `packaging\pack.ps1 -BuilderPath packaging\tools\kirara-builder.exe`。
+   `packaging\pack.ps1 -BuilderPath packaging\tools\kirara-builder.exe`；给了
+   `-BuilderPath` 就不再查找 Kirara 目录（CI 里没有 Kirara 检出）。
 
 **安装器工具链只来自 Kirara 官方发布的最新 Release 产物**：本仓库不内嵌 kachina 源码、
 不是 submodule；工作流与打包脚本除 `gh release download --repo bainian-gudu/Kirara`

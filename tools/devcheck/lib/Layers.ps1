@@ -81,6 +81,11 @@ function Test-KiraraBoundary {
             throw "packaging/pack.ps1 里找不到 $needle —— 打包脚本必须只从 Kirara 取 kirara-builder"
         }
     }
+    # -BuilderPath 给的是现成产物，必须就此跳过 Kirara 目录查找：
+    # CI 的 pack job 里没有 Kirara 检出，多查一次就会直接失败（真踩过）。
+    if ($pack -notmatch '(?m)^\s*if\s*\(\s*\$BuilderPath\s*\)\s*\{\s*\$SkipBuilderBuild\s*=\s*\$true\s*\}') {
+        throw 'packaging/pack.ps1 给了 -BuilderPath 仍会去 Kirara 目录找 build.ps1 —— 与 .PARAMETER BuilderPath 的约定不符'
+    }
     $notes.Add('打包脚本只从 Kirara 取 builder')
 
     return ($notes -join '；')
