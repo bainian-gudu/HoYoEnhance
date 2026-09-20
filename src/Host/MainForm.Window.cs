@@ -239,8 +239,11 @@ internal sealed partial class MainForm : Form
                 // 保证不残留透明（历史路径 / 异常）
                 try { Opacity = 1; } catch { /* ignore */ }
 
-                // 用户可能拖完窗口马上点最小化：隐藏前先落一次位置
+                // 用户可能拖完窗口马上点最小化：隐藏前先落一次位置，并刷新托盘恢复坐标。
+                // 恢复坐标只在启动 / DPI 变化时算过，这里不刷新的话「拖动 → 进托盘 → 再打开」
+                // 会跳回拖动前的位置。
                 SaveWindowLocationNow();
+                CaptureRestoreLocation();
 
                 // 先藏窗再摘任务栏：Hide 即时隐藏、无最小化动画；
                 // 且 ShowInTaskbar 变更触发 RecreateHandle 时窗口已不可见，
@@ -415,11 +418,26 @@ internal sealed partial class MainForm : Form
     }
 
     /// <summary>
-    /// 记录从托盘恢复时要用的位置：优先用户上次移动到的位置，
-    /// 没有记录（首次运行）才退回屏幕中央。
+    /// 记录从托盘恢复时要用的位置，优先级：还没落盘的用户摆放位置 → 当前窗口位置
+    /// （启动进托盘时是 -32000 占位坐标，会被可见性判断挡掉）→ 配置里记着的位置 →
+    /// 都没有才退回屏幕中央。
     /// </summary>
     private void CaptureRestoreLocation()
     {
+        if (_windowLocation.Pending is Point pending)
+        {
+            _restoreLocation = pending;
+            _hasRestoreLocation = true;
+            return;
+        }
+
+        if (IsWindowLocationVisible(Location))
+        {
+            _restoreLocation = Location;
+            _hasRestoreLocation = true;
+            return;
+        }
+
         if (TryGetSavedWindowLocation(out var saved))
         {
             _restoreLocation = saved;
@@ -444,10 +462,21 @@ internal sealed partial class MainForm : Form
         if (_config.WindowLeft is not int left || _config.WindowTop is not int top)
             return false;
 
-        var probe = new Rectangle(left, top, Math.Max(1, Width), Math.Max(1, Height));
-        // 与 EnsureOnScreen 同一套可见性口径：至少留 40px 在某个工作区内，
-        // 只露出一条边或一个角的位置按「不可见」处理。
-        var visible = Screen.AllScreens.Any(s =>
+        if (!IsWindowLocationVisible(new Point(left, top)))
+            return false;
+
+        location = new Point(left, top);
+        return true;
+    }
+
+    /// <summary>
+    /// 窗口左上角落在某个屏幕工作区内且至少露出 40px —— 与 <see cref="EnsureOnScreen"/>
+    /// 同一套口径：只露出一条边或一个角的位置按「不可见」处理。
+    /// </summary>
+    private bool IsWindowLocationVisible(Point location)
+    {
+        var probe = new Rectangle(location.X, location.Y, Math.Max(1, Width), Math.Max(1, Height));
+        return Screen.AllScreens.Any(s =>
         {
             var wa = s.WorkingArea;
             return probe.Right > wa.Left + 40 &&
@@ -455,11 +484,6 @@ internal sealed partial class MainForm : Form
                    probe.Left < wa.Right - 40 &&
                    probe.Top < wa.Bottom - 40;
         });
-        if (!visible)
-            return false;
-
-        location = new Point(left, top);
-        return true;
     }
 
     /// <summary>
@@ -471,10 +495,7 @@ internal sealed partial class MainForm : Form
         if (_reallyExit || IsDisposed) return;
         if (!Visible || _inTray || WindowState != FormWindowState.Normal) return;
         if (Location.X <= -1000 || Location.Y <= -1000) return;
-        if (_config.WindowLeft == Location.X && _config.WindowTop == Location.Y) return;
-
-        _config.WindowLeft = Location.X;
-        _config.WindowTop = Location.Y;
+        if (!_windowLocation.Observe(Location, _config.WindowLeft, _config.WindowTop)) return;
 
         if (_windowLocationSaveTimer is null)
         {
@@ -489,20 +510,29 @@ internal sealed partial class MainForm : Form
         _windowLocationSaveTimer.Start();
     }
 
-    /// <summary>立即把当前窗口位置写入配置（托盘隐藏 / 退出前调用，避免节流窗口内丢改动）。</summary>
+    /// <summary>
+    /// 立即把用户摆放的最后位置写进配置（托盘隐藏 / 退出前调用，避免节流窗口内丢改动）。
+    ///
+    /// 这里只认 <see cref="WindowLocationState"/> 里待落盘的位置，不看当前的
+    /// <see cref="Control.Location"/>：走到这一步时窗口往往已经藏进托盘（不可见，
+    /// Location 也不再是用户摆放的位置），早先按 Location 取值 + 比较配置字段的写法
+    /// 会直接判定「没变化」而一次都不落盘。
+    /// </summary>
     private void SaveWindowLocationNow()
     {
         try
         {
             _windowLocationSaveTimer?.Stop();
-            if (!Visible || _inTray || WindowState != FormWindowState.Normal) return;
-            if (Location.X <= -1000 || Location.Y <= -1000) return;
-            if (_config.WindowLeft == Location.X && _config.WindowTop == Location.Y) return;
+            if (_windowLocation.Pending is not Point pending) return;
 
-            _config.WindowLeft = Location.X;
-            _config.WindowTop = Location.Y;
+            _config.WindowLeft = pending.X;
+            _config.WindowTop = pending.Y;
             if (!_config.TrySave(out var err))
+            {
                 AppLog.Debug("window location save: " + err);
+                return;
+            }
+            _windowLocation.MarkSaved();
         }
         catch (Exception ex)
         {

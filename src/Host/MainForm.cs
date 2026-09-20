@@ -41,6 +41,8 @@ internal sealed partial class MainForm : Form
     private bool _hasRestoreLocation;
     /// <summary>窗口位置落盘节流：拖动时 LocationChanged 连发，合并成一次保存。</summary>
     private System.Windows.Forms.Timer? _windowLocationSaveTimer;
+    /// <summary>待落盘的用户摆放位置，见 <see cref="WindowLocationState"/>。</summary>
+    private readonly WindowLocationState _windowLocation = new();
     /// <summary>设计尺寸只在首个窗口句柄建好后套用一次，句柄重建（托盘切换）不得重置用户尺寸。</summary>
     private bool _initialSizeApplied;
     private CancellationTokenSource? _wakeCts;

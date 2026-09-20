@@ -9,6 +9,7 @@ internal static class Program
         ProcessRunnerTests.Run(harness);
         GameLocatorTests.Run(harness);
         TrayGameFollowStateTests.Run(harness);
+        WindowLocationStateTests.Run(harness);
         RunningSessionTrackerTests.Run(harness);
         AutostartTests.Run(harness);
         ConfigExportTests.Run(harness);
