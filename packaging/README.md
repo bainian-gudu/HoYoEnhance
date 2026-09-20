@@ -298,24 +298,23 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 
 `build.yml` 三个 job：
 
-1. `build-builder` —— 按输入 `kirara_ref`（默认 `main`，可填分支 / tag / commit）检出
-   独立项目 Kirara，跑它的 `build.ps1` 从源码构建 `kirara-builder.exe`；源码未变时命中
-   `actions/cache`（key = Kirara 侧源码哈希）直接复用，输入 `rebuild_builder=true`
-   强制重建。
+1. `build-builder` —— 用 `gh release download` 下载独立项目 Kirara 最新 Release 的
+   `kirara-builder.exe`（Kirara 自己的发布流程负责从源码构建），本仓库 CI 不再检出
+   Kirara 源码、也不再现场编译 Rust。
 2. `build-app` —— `build.ps1 -SkipSetup` 产出 `dist\`；随后让刚构建出的宿主导出
    登录计划任务 XML，交给 runner 上的 `schtasks` 真建一次、真删一次。
 3. `pack` —— 下载前两者的产物，执行
    `packaging\pack.ps1 -BuilderPath packaging\tools\kirara-builder.exe`。
 
-**不从上游 Release 下载 `kachina-builder.exe`，也不从上游仓库拉源码**：安装器工具链
-只来自 Kirara 的固定 ref，由它的源码现场构建。这条约束由 devcheck 的 `vendor` 层自动
-断言（本仓库不内嵌 kachina 源码、不是 submodule、工作流与打包脚本里没有任何
-`git clone` / `releases/download` / `Invoke-WebRequest` 之类的外部拉取动作、CI 确实从
-Kirara 的固定 ref 构建），每次 push 都会在 Devcheck 工作流里跑一遍。遥测
-（Sentry / cocogoat 统计）不许回归的断言在 Kirara 的 `tools/devcheck` 里。
+**安装器工具链只来自 Kirara 官方发布的最新 Release 产物**：本仓库不内嵌 kachina 源码、
+不是 submodule；工作流与打包脚本除 `gh release download --repo bainian-gudu/Kirara`
+外，没有任何其它 `git clone` / `releases/download` / `Invoke-WebRequest` 之类的外部
+拉取动作。这条约束由 devcheck 的 `vendor` 层自动断言，每次 push 都会在 Devcheck
+工作流里跑一遍。遥测（Sentry / cocogoat 统计）不许回归的断言在 Kirara 的
+`tools/devcheck` 里。
 
-CI 仍会联网获取 NuGet / crates.io / npm registry / rustup 工具链 / marketplace action ——
-这是任何构建都免不了的；被禁止的是「安装器本体来自 Kirara 之外的来源」。
+CI 仍会联网获取 NuGet / npm registry / marketplace action —— 这是任何构建都免不了的；
+被禁止的是「安装器本体来自 Kirara 之外的来源」。
 
 ### workflow 里那些看着多余的设置
 

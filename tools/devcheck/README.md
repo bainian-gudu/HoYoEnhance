@@ -20,7 +20,7 @@ pwsh tools/devcheck/devcheck.ps1 -Layer ui          # 不在 all 里：要先 cd
 
 | 层 | 检查什么 | 需要的工具 | 热跑耗时 |
 | --- | --- | --- | --- |
-| `vendor` | **安装器工具链只在 Kirara**：本仓库没有内嵌 kachina 源码、不是 submodule、工作流与打包脚本里没有任何从外部拉源码 / 下二进制的动作，CI 确实从 Kirara 的固定 ref 构建 `kirara-builder` | pwsh 7 | <0.1s |
+| `vendor` | **安装器工具链只在 Kirara**：本仓库没有内嵌 kachina 源码、不是 submodule；工作流与打包脚本除从 Kirara 最新 Release 下载 `kirara-builder.exe` 外，没有其它从外部拉源码 / 下二进制的动作 | pwsh 7 | <0.1s |
 | `ps1` | 仓库里全部 `.ps1` 的语法（PowerShell Parser） | pwsh 7 | <0.1s |
 | `packaging` | **打包配置与宿主源码的接线**：`packaging/packaging.config.json` 的品牌名 / 旧品牌兼容名 / 卸载时要回收的注册表值、计划任务、快捷方式、用户数据目录、协议正文、更新源，逐项与 `src/Host` 里的常量交叉断言 | pwsh 7 | ~0.1s |
 | `host` | `src/Host` 的 `dotnet build -c Release -p:EnableWindowsTargeting=true` | .NET 9 SDK | ~2–8s |
@@ -38,16 +38,18 @@ pwsh tools/devcheck/devcheck.ps1 -Layer ui          # 不在 all 里：要先 cd
 1. 仓库根不存在 `.gitmodules`，且 `packaging/kachina`、`kachina/`、
    `packaging/build-kachina.ps1` 都不存在（历史路径 `installer/...` 一并守着，
    源码不能再被搬回来）
-2. `.github/workflows/*.yml`、`packaging/*.ps1`、`build.ps1` 里**没有任何**从外部拉取的
-   动作：`YuehaiTeam`、`kachina-installer.git`、`releases/download`、`release-downloader`、
-   `git clone`、`git submodule`、`Invoke-WebRequest`、`Invoke-RestMethod`、`DownloadFile`、
-   `curl`、`wget`（只扫可执行内容，`#` 注释行与 `<# #>` 块跳过）
-3. `build.yml` 检出 `bainian-gudu/Kirara` 且带固定 `ref`，调用它的 `build.ps1`，
-   builder 缓存 key 基于 Kirara 的源码哈希
+2. `.github/workflows/*.yml`、`packaging/*.ps1`、`build.ps1` 里除 Kirara Release 下载外
+   **没有任何其它**从外部拉取的动作：`YuehaiTeam`、`kachina-installer.git`、
+   `releases/download`、`release-downloader`、`git clone`、`git submodule`、
+   `Invoke-WebRequest`、`Invoke-RestMethod`、`DownloadFile`、`curl`、`wget`
+   （只扫可执行内容，`#` 注释行与 `<# #>` 块跳过）
+3. `build.yml` 用 `gh release download --repo bainian-gudu/Kirara --pattern kirara-builder.exe`
+   直接取最新 Release 的构建产物，不再检出 Kirara 源码、不再调用它的 `build.ps1`
 4. `packaging/pack.ps1` 只从 Kirara 取 builder（`$KiraraRepo` / `build.ps1` / `$BuilderPath`）
 
 > CI 仍然会联网取 NuGet / npm registry / marketplace action —— 那是任何构建都免不了的；
-> 这一层保证的是**安装器工具链只来自 Kirara 的固定 ref**，不从任何 Release 下二进制。
+> 这一层保证的是**安装器工具链只来自 Kirara 官方发布的最新 Release 产物**，
+> 不从任何其它来源拉源码或下二进制。
 
 ## `packaging` 层：配置与宿主不能各说各话
 
@@ -59,11 +61,11 @@ pwsh tools/devcheck/devcheck.ps1 -Layer ui          # 不在 all 里：要先 cd
 
 ## `-SelfTest`：证明这套检查不是空壳
 
-检查工具最大的风险是「跑通了但其实什么都没查」。`-SelfTest` 会注入 7 个错误，逐个确认
+检查工具最大的风险是「跑通了但其实什么都没查」。`-SelfTest` 会注入 8 个错误，逐个确认
 对应层会失败：把 kachina 源码搬回仓库、工作流里加一条 `Invoke-WebRequest`、把打包脚本
-的 `$KiraraRepo` 改名、放一个语法错误的 `.ps1`、改坏 `packaging.config.json` 的
-`exeName`、拿掉 `ProcessRunner` 超时路径的 `KillTree`、删掉 `GameLocator` 剪枝表里的
-系统目录行。
+的 `$KiraraRepo` 改名、把 `build.yml` 里的 Kirara Release 仓库改成别家、放一个语法
+错误的 `.ps1`、改坏 `packaging.config.json` 的 `exeName`、拿掉 `ProcessRunner`
+超时路径的 `KillTree`、删掉 `GameLocator` 剪枝表里的系统目录行。
 
 自检会临时改写**仓库里的真实文件**，因此有两个保护：
 

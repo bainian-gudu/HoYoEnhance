@@ -51,6 +51,18 @@ jobs:
         -Run { Test-KiraraBoundary } `
         -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $packScript) -Path $packScript }
 
+    # --- 3b) vendor：build.yml 不再从 Kirara 的 Release 取 builder 就必须报错 ---
+    $buildYml = Join-Path $RepoRoot '.github/workflows/build.yml'
+    Add-Case 'vendor 层能抓到 builder 来源不再是 Kirara Release' `
+        -Mutate {
+            $text = [System.IO.File]::ReadAllText($buildYml)
+            $broken = $text.Replace('bainian-gudu/Kirara', 'example/Elsewhere')
+            if ($broken -eq $text) { throw '注入失败：build.yml 里没有 bainian-gudu/Kirara' }
+            [System.IO.File]::WriteAllText($buildYml, $broken)
+        } `
+        -Run { Test-KiraraBoundary } `
+        -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $buildYml) -Path $buildYml }
+
     # --- 4) ps1：临时放一个语法错误的 .ps1 进仓库 ---
     Add-Case 'ps1 层能抓到 PowerShell 语法错误' `
         -Mutate {

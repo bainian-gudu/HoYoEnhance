@@ -20,25 +20,12 @@ on:
         options:
           - framework-dependent
           - self-contained
-      rebuild_builder:
-        description: "强制从 Kirara 源码重建 kirara-builder（忽略缓存）"
-        required: false
-        default: false
-        type: boolean
-      kirara_ref:
-        description: "Kirara（安装器工具链）仓库的 ref：分支 / tag / commit"
-        required: true
-        default: "main"
-        type: string
 # 只需要 checkout 与上传 artifact，不需要写权限（与 devcheck.yml 一致）
 permissions:
   contents: read
 
-# 同一分支的 Build 串行排队：并发跑除了抢 runner，还会让 Swatinem/rust-cache 撞车 ——
-# 两轮构建的 cache key 相同（由 rustc / Cargo.lock / src-tauri 工作区哈希算出），
-# 后完成那轮的 post 步骤会报 “Unable to reserve cache ... another job may be creating
-# this cache”，白存一次。与 devcheck.yml 不同，这里不打断进行中的构建（产物仍要），
-# 新触发只排队等前一轮跑完。
+# 同一分支的 Build 串行排队：两轮打包同时跑除了抢 runner，
+# 还会让两端分别下载 / 上传同名 artifact 互相覆盖。新触发只排队等前一轮跑完。
 concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: false
@@ -46,124 +33,39 @@ concurrency:
 env:
   DOTNET_VERSION: "9.0.x"
   NODE_VERSION: "22"
-  # 上游 kachina-installer 固定用 nightly + -Z build-std
-  RUST_TOOLCHAIN: "nightly"
   # 避免 runner 上 SDK 10 抢先解析 csproj（仍以 global.json rollForward 为准）
   DOTNET_NOLOGO: "1"
   DOTNET_CLI_TELEMETRY_OPTOUT: "1"
-  CARGO_TERM_COLOR: "always"
   # 压掉第三方 action 自己的告警，理由见
   # tools/devcheck/README.md「日志里哪些 Warning / error 是正常的」
   NODE_NO_WARNINGS: "1"
 
 jobs:
   # ---------------------------------------------------------------------------
-  # 安装器工具链在独立项目 Kirara：检出固定 ref 并从其源码构建 kirara-builder.exe
-  # 二进制只从该 ref 的源码构建，不从任何 Release 下载
+  # 安装器工具链在独立项目 Kirara：直接下载最新 Release 里构建好的
+  # kirara-builder.exe。本仓库 CI 不再检出 Kirara 源码、不再现场编译 Rust。
   # ---------------------------------------------------------------------------
   build-builder:
-    name: Installer builder (from Kirara)
+    name: Installer builder (Kirara latest release)
     runs-on: windows-latest
-    timeout-minutes: 90
+    timeout-minutes: 15
     steps:
-      - name: Checkout Kirara
-        uses: actions/checkout@v5
-        with:
-          repository: bainian-gudu/Kirara
-          ref: ${{ inputs.kirara_ref }}
-          path: kirara
-
-      # 源码没变就直接复用上次的产物（Rust LTO + build-std + 静态 msquic 冷构建很慢）。
-      # 这一步**始终执行**：被 if 跳过时 actions/cache 连保存都不会做，强制重建那一轮
-      # 跑完就存不下缓存，下一轮还得再冷构建一次（真踩过）。
-      - name: Cache kirara-builder.exe
-        id: builder-cache
-        # 版本下限见 tools/devcheck/README.md「日志里哪些 Warning / error 是正常的」
-        uses: actions/cache@v5
-        with:
-          path: kirara/tools/kirara-builder.exe
-          key: kirara-builder-${{ runner.os }}-${{ hashFiles('kirara/src/**', 'kirara/src-tauri/**', 'kirara/vendor/**', 'kirara/package.json', 'kirara/pnpm-lock.yaml') }}
-
-      # rebuild_builder=true 只决定「命中缓存也要重建」，不再决定要不要读写缓存：
-      # 没命中就构建，跑完由上面的缓存步骤把新产物存进去。
-      - name: Decide whether to rebuild
-        id: builder
+      # gh CLI 在 GitHub runner 上预装；默认取 Latest Release，不固定 tag，
+      # 始终使用 Kirara 已发布、已通过其自身 CI 的安装器构建工具。
+      - name: Download kirara-builder from latest release
         shell: pwsh
-        run: |
-          $hit = '${{ steps.builder-cache.outputs.cache-hit }}' -eq 'true'
-          $force = '${{ inputs.rebuild_builder }}' -eq 'true'
-          $rebuild = -not ($hit -and -not $force)
-          "rebuild=$($rebuild.ToString().ToLowerInvariant())" |
-            Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "cache-hit=$hit force=$force rebuild=$rebuild"
-
-      # 长路径 + 下面的 CMAKE_GENERATOR: Ninja 是同一件事的两道防线（FTK1011），
-      # 详见 tools/devcheck/README.md「日志里哪些 Warning / error 是正常的」
-      - name: Enable Windows long paths
-        if: steps.builder.outputs.rebuild == 'true'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $key = "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem"
-          New-ItemProperty -Path $key -Name LongPathsEnabled -Value 1 -PropertyType DWORD -Force |
-            Out-Null
-          "LongPathsEnabled = " + (Get-ItemProperty -Path $key).LongPathsEnabled
-
-      - name: Install Rust nightly + rust-src
-        if: steps.builder.outputs.rebuild == 'true'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          rustup toolchain install $env:RUST_TOOLCHAIN --profile minimal
-          rustup component add rust-src --toolchain $env:RUST_TOOLCHAIN
-          rustc --version; cargo --version
-
-      - name: Cache cargo / target
-        if: steps.builder.outputs.rebuild == 'true'
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: "kirara/src-tauri"
-          cache-targets: true
-          key: kirara-src
-
-      - name: Setup pnpm
-        if: steps.builder.outputs.rebuild == 'true'
-        # 版本下限见 tools/devcheck/README.md「日志里哪些 Warning / error 是正常的」
-        uses: pnpm/action-setup@v6
-        with:
-          # 检出目录的根没有 package.json；版本号（pnpm@10.17.0）从上游快照的
-          # packageManager 字段读取
-          package_json_file: kirara/package.json
-
-      - name: Setup Node.js
-        if: steps.builder.outputs.rebuild == 'true'
-        uses: actions/setup-node@v5
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-          cache-dependency-path: kirara/pnpm-lock.yaml
-
-      # Ninja 生成器不会像 MSBuild 那样自己去 VS 安装目录找 cl.exe，
-      # 必须先把 MSVC 开发环境注入 PATH / INCLUDE / LIB。
-      - name: Add MSVC Developer environment
-        if: steps.builder.outputs.rebuild == 'true'
-        shell: pwsh
-        run: kirara/tools/ci/Import-DevCmd.ps1 -Arch x64
-
-      - name: Build kirara-builder from source
-        if: steps.builder.outputs.rebuild == 'true'
         env:
-          # cmake-rs 会读取 CMAKE_GENERATOR；Ninja 不写 .tlog，绕开 FTK1011（见 README）
-          CMAKE_GENERATOR: Ninja
-        shell: pwsh
+          GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = "Stop"
-          "CMAKE_GENERATOR = $env:CMAKE_GENERATOR"
-          & cmake --version | Select-Object -First 1
-          & ninja --version
-          & .\kirara\build.ps1 -Toolchain $env:RUST_TOOLCHAIN
+          New-Item -ItemType Directory -Force -Path "kirara/tools" | Out-Null
+          gh release download `
+            --repo bainian-gudu/Kirara `
+            --pattern "kirara-builder.exe" `
+            --dir "kirara/tools" `
+            --clobber
           if (-not (Test-Path "kirara\tools\kirara-builder.exe")) {
-            throw "kirara-builder.exe 未生成"
+            throw "kirara-builder.exe 未下载"
           }
           Get-Item kirara\tools\kirara-builder.exe |
             Select-Object FullName, @{n = "MB"; e = { [math]::Round($_.Length / 1MB, 2) }} |
@@ -263,7 +165,7 @@ jobs:
           retention-days: 7
 
   # ---------------------------------------------------------------------------
-  # 打包：用 Kirara 构建出的 kirara-builder 跑 packaging/pack.ps1
+  # 打包：用 Kirara 最新 Release 的 kirara-builder 跑 packaging/pack.ps1
   # ---------------------------------------------------------------------------
   pack:
     name: Pack installer

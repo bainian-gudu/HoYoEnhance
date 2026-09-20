@@ -7,8 +7,8 @@
     分层检查，越靠前越快、依赖越少：
 
       vendor 安装器工具链只在独立项目 Kirara：本仓库不再内嵌 kachina 源码、不是
-             submodule、工作流与打包脚本里没有任何从外部拉源码 / 下二进制的动作，
-             CI 确实从 Kirara 的固定 ref 构建 kachina-builder
+             submodule；CI 只从 Kirara 最新 Release 下载 kirara-builder.exe，
+             不从其它来源拉源码 / 下二进制
       ps1    所有 .ps1 的语法解析（PowerShell Parser，秒级，无依赖）
       packaging 安装包配置与宿主源码的接线：品牌名 / 旧品牌兼容名 / 卸载时要回收的
              注册表值、计划任务、快捷方式、用户数据目录、协议正文、更新源

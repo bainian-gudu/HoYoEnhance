@@ -118,6 +118,7 @@ function Restore-RepoFile {
 # -SelfTest 注入过的仓库内文件；下一次运行（哪怕上一次是被杀掉）先按它清场。
 $script:SelfTestRepoFiles = @(
     '.github/workflows/zz-devcheck-selftest.yml',
+    '.github/workflows/build.yml',
     'packaging/pack.ps1',
     'packaging/packaging.config.json',
     'src/Host/ProcessRunner.cs',

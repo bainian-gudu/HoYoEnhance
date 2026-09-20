@@ -54,15 +54,16 @@
 | 宿主主程序 | C# / .NET 9（`net9.0-windows10.0.17763.0`）/ WinForms | `src/Host/`：WebView2 承载 Web UI、系统托盘、自绘标题栏、注入调度、游戏定位、配置与日志 |
 | Web UI | React 19 + TypeScript 5.9 + Vite 7 + Tailwind CSS 4 + framer-motion + lucide-react | `src/Ui/`：设计稿由 **gpt-6-astra-max** 设计、按稿 1:1 实现；`vite-plugin-singlefile` 打成单文件 `ui/index.html` |
 | 注入模块 | C++20（CMake）+ MinHook（BSD-2-Clause），CRT 静态链接（`/MT`） | `src/Stub/`：原神的帧率解锁与反虚化；`src/StubStarRail/`：星铁的反角色虚化与隐藏 UID（`StarRailStub.dll`，帧率仍走注册表）；两者只共用 `src/Common/` 的扫描器与 IPC 协议，业务代码相互独立 |
-| 安装 / 卸载 / 更新器 | Kachina：Rust + Tauri 2（nightly + `-Z build-std`）+ Vue 3.5 + Rsbuild | 独立项目 [Kirara](https://github.com/bainian-gudu/Kirara)：上游源码快照（tag `0.5.1`）+ 本地修改，产出 `kirara-builder.exe` |
+| 安装 / 卸载 / 更新器 | Kachina：Rust + Tauri 2（nightly + `-Z build-std`）+ Vue 3.5 + Rsbuild | 独立项目 [Kirara](https://github.com/bainian-gudu/Kirara)：上游源码快照（tag `0.5.1`）+ 本地修改，产出 `kirara-builder.exe`；本仓库 CI 直接取它的最新 Release 产物 |
 | exe 图标 / 版本资源写入 | vendored `rcedit-rs`（C++，MSVC 编译） | Kirara 的 `vendor/rcedit-rs/`，与上游差异见其 `LOCAL_PATCHES.md` |
 | 构建 / 打包 / 自检 | PowerShell 7 | `build.ps1`、`packaging/pack.ps1`、`tools/devcheck/` |
 | CI | GitHub Actions（`ubuntu-latest` + `windows-latest`） | `devcheck.yml`（push/PR 自动）、`build.yml`（仅手动） |
 
 ## 构建
 
-默认构建主程序和安装器。安装器由独立项目 Kirara 从源码构建出的 `kirara-builder.exe`
-生成，本仓库的打包配置与脚本集中在 [`packaging/`](packaging/)。
+默认构建主程序和安装器。安装器由独立项目 Kirara 产出的 `kirara-builder.exe` 生成：
+本地构建默认按需从 Kirara 源码构建，CI 直接下载它的最新 Release 产物。本仓库的
+打包配置与脚本集中在 [`packaging/`](packaging/)。
 
 > 说明：当前主程序、安装包、便携包、快捷方式、界面与窗口标题统一为 **HoYoEnhance**。
 > 为兼容老用户升级与卸载，数据目录、卸载注册表键、IPC / 自启动任务等内部标识仍保留
@@ -243,19 +244,18 @@ pwsh tools/devcheck/devcheck.ps1 -SelfTest       # 注入错误，确认每层�
 | 工作流 | 触发 | 内容 | 耗时 |
 | --- | --- | --- | --- |
 | **Devcheck**（`.github/workflows/devcheck.yml`） | push 到 main / PR / 手动，**自动执行** | `tools/devcheck` 全部检查层 + 自检 + Web UI 构建，ubuntu 与 windows 双 runner | 几分钟 |
-| **Build**（`.github/workflows/build.yml`） | **仅手动**（Actions → Build → Run workflow） | 按 `kirara_ref` 检出 Kirara → 从源码构建 `kirara-builder` → 应用本体 → 打包安装器 | 十几分钟起 |
+| **Build**（`.github/workflows/build.yml`） | **仅手动**（Actions → Build → Run workflow） | 下载 Kirara 最新 Release 的 `kirara-builder` → 应用本体 → 打包安装器 | 几分钟起 |
 
-Kachina **只从独立项目 Kirara 的固定 ref 源码构建**：本仓库的 CI 与打包脚本都不从上游拉源码、
-也不下载现成二进制，检出 Kirara 后由它的 `build.ps1` 现场构建 `kirara-builder.exe`
-（唯一带 C++ 的依赖 `rcedit-rs` 在 Kirara 里 vendored）。这条约束由 devcheck 的 `vendor`
-层自动断言，细节见 Kirara 的 `UPSTREAM.md` 与
+CI 的安装器工具链**只从独立项目 Kirara 的最新 Release 下载** `kirara-builder.exe`
+（Kirara 自己的发布流程负责从源码构建并挂出产物）；本仓库 CI 不再检出 Kirara 源码、
+也不再现场编译 Rust。本地开发仍可按需调用 Kirara 的 `build.ps1`。这条约束由 devcheck
+的 `vendor` 层自动断言，细节见 Kirara 的 `UPSTREAM.md` 与
 [`tools/devcheck/README.md`](tools/devcheck/README.md)。
 
-**Build** 依次跑 `build-builder`（按输入 `kirara_ref` 检出 Kirara → 从源码构建
-`kirara-builder.exe`，源码未变时命中缓存，输入 `rebuild_builder=true` 可强制重建）→
-`build-app` → `pack`，可选 `host_mode=self-contained` 打全量自包含主程序；产物与本地构建
-一致，挂在 Release 上。把 `Install` 包发布到 Release 且 tag 为 `v{version}` 后，配置里的
-GitHub 在线源即可用于更新器。
+**Build** 依次跑 `build-builder`（下载 Kirara 最新 Release 的 `kirara-builder.exe`）→
+`build-app` → `pack`，可选 `host_mode=self-contained` 打全量自包含主程序；产物与本地
+构建一致，挂在 Release 上。把 `Install` 包发布到 Release 且 tag 为 `v{version}` 后，
+配置里的 GitHub 在线源即可用于更新器。
 
 ## 隐私与遥测
 

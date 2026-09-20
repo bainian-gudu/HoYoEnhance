@@ -8,8 +8,9 @@ function Test-KiraraBoundary {
     # 已拆到独立项目 Kirara。本仓库只保留 packaging/ 下的安装包配置与打包脚本，
     # 因此这里守住三件事：
     #   1) 本仓库不再内嵌 kachina 源码，也不是 submodule；
-    #   2) 工作流 / 打包脚本里没有任何从外部拉源码、下二进制的动作；
-    #   3) CI 确实从 Kirara 的固定 ref 构建 kirara-builder，打包只用这个产物。
+    #   2) 工作流 / 打包脚本除了从 Kirara 最新 Release 下载 kirara-builder.exe，
+    #      没有其它从外部拉源码、下二进制的动作；
+    #   3) CI 确实从 Kirara 最新 Release 取 builder，打包只用这个产物。
     $notes = [System.Collections.Generic.List[string]]::new()
 
     # 1) 本仓库不许再出现 kachina 源码
@@ -24,7 +25,8 @@ function Test-KiraraBoundary {
     }
     $notes.Add('无内嵌 kachina 源码 / 非 submodule')
 
-    # 2) 工作流与打包脚本里不许出现「从外部拉源码 / 下二进制」的动作
+    # 2) 工作流与打包脚本里除 Kirara Release 下载外，不许出现其它
+    #    「从外部拉源码 / 下二进制」的动作。
     #    只扫可执行内容：注释行（# 开头）跳过，避免误伤说明性文字
     $scan = @(Get-ChildItem -LiteralPath (Join-Path $RepoRoot '.github/workflows') -Filter '*.yml' -File)
     $scan += @(Get-ChildItem -LiteralPath (Join-Path $RepoRoot 'packaging') -Filter '*.ps1' -File)
@@ -56,21 +58,21 @@ function Test-KiraraBoundary {
     }
     $notes.Add("$($scan.Count) 个工作流/脚本无外部拉取")
 
-    # 3) build.yml 必须从 Kirara 的固定 ref 构建 kirara-builder
+    # 3) build.yml 必须从 Kirara 最新 Release 下载 kirara-builder.exe
     $buildYml = [System.IO.File]::ReadAllText((Join-Path $RepoRoot '.github/workflows/build.yml'))
-    if ($buildYml -notmatch 'repository:\s*bainian-gudu/Kirara') {
-        throw 'build.yml 没有检出 bainian-gudu/Kirara —— 安装器工具链只能来自该仓库'
+    if ($buildYml -notmatch 'gh\s+release\s+download') {
+        throw 'build.yml 没有用 gh release download 拉取 kirara-builder —— 只允许直接使用 Kirara 已发布的构建产物'
     }
-    if ($buildYml -notmatch '(?m)^\s+ref:\s*\$\{\{\s*inputs\.kirara_ref\s*\}\}') {
-        throw 'build.yml 检出 Kirara 时没有固定 ref（必须是可指定的分支 / tag / commit）'
+    if ($buildYml -notmatch '--repo\s+bainian-gudu/Kirara') {
+        throw 'build.yml 下载 builder 时没有指定 bainian-gudu/Kirara —— 安装器工具链只能来自该仓库'
     }
-    if ($buildYml -notmatch 'build\.ps1') {
-        throw 'build.yml 没有调用 Kirara 的 build.ps1 —— kirara-builder 必须从源码构建'
+    if ($buildYml -notmatch '--pattern\s+["'']?kirara-builder\.exe') {
+        throw 'build.yml 下载的不是 kirara-builder.exe'
     }
-    if ($buildYml -notmatch [regex]::Escape("'kirara/src-tauri/**'")) {
-        throw 'build.yml 的 kirara-builder 缓存 key 没有基于 Kirara 的源码哈希'
+    if ($buildYml -match 'repository:\s*bainian-gudu/Kirara' -or $buildYml -match 'kirara/build\.ps1') {
+        throw 'build.yml 又在检出 / 编译 Kirara 源码 —— 只允许直接下载最新 Release 产物'
     }
-    $notes.Add('CI 从 Kirara 固定 ref 源码构建 + 源码哈希缓存')
+    $notes.Add('CI 从 Kirara 最新 Release 下载 builder')
 
     # 4) 打包脚本只认 Kirara 的产物（或显式指定的 builder）
     $pack = [System.IO.File]::ReadAllText((Join-Path $RepoRoot 'packaging/pack.ps1'))

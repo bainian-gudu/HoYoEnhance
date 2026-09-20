@@ -59,7 +59,8 @@ jobs:
           cache-dependency-path: src/Ui/package-lock.json
 
       # vendor 层断言：安装器工具链只在独立项目 Kirara，本仓库不再内嵌 kachina
-      # 源码、也没有任何从外部拉源码 / 下二进制的动作（详见 tools/devcheck/README.md）。
+      # 源码，只从 Kirara 最新 Release 下载 kirara-builder.exe
+      # （详见 tools/devcheck/README.md）。
       # 单独跑一次，让这条约束在日志里有独立、显眼的结论。
       # 注意：本文件的注释里不要写上游仓库名，vendor 层会扫工作流文件。
       - name: Installer toolchain guard
@@ -76,7 +77,7 @@ jobs:
         shell: pwsh
         run: pwsh -NoProfile -File ./tools/devcheck/devcheck.ps1
 
-      # 自检：注入 14 个错误，确认每一层真的会报错（防止「检查跑通了但其实什么都没查」）。
+      # 自检：注入错误，确认每一层真的会报错（防止「检查跑通了但其实什么都没查」）。
       # 自检会临时改写仓库文件，因此自带仓库改动锁：同一工作区里若还有别的 devcheck
       # 在跑，它会直接报「另一个 devcheck 正持有仓库改动锁」而不是互相污染出假失败。
       - name: devcheck -SelfTest
