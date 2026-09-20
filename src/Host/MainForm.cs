@@ -39,6 +39,8 @@ internal sealed partial class MainForm : Form
     /// <summary>启动托盘时暂存正常位置，恢复时用。</summary>
     private Point _restoreLocation;
     private bool _hasRestoreLocation;
+    /// <summary>窗口位置落盘节流：拖动时 LocationChanged 连发，合并成一次保存。</summary>
+    private System.Windows.Forms.Timer? _windowLocationSaveTimer;
     /// <summary>设计尺寸只在首个窗口句柄建好后套用一次，句柄重建（托盘切换）不得重置用户尺寸。</summary>
     private bool _initialSizeApplied;
     private CancellationTokenSource? _wakeCts;
@@ -63,6 +65,12 @@ internal sealed partial class MainForm : Form
         Size = DefaultLogicalSize;
         MinimumSize = MinimumLogicalSize;
         StartPosition = FormStartPosition.CenterScreen;
+        // 有历史位置就直接恢复；没有才走 CenterScreen 首次居中。
+        if (TryGetSavedWindowLocation(out var savedLocation))
+        {
+            StartPosition = FormStartPosition.Manual;
+            Location = savedLocation;
+        }
         FormBorderStyle = FormBorderStyle.Sizable;
         MaximizeBox = true;
         MinimizeBox = true;

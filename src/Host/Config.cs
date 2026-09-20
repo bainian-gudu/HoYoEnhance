@@ -52,6 +52,17 @@ internal sealed partial class AppConfig
     /// </summary>
     public bool StartMinimized { get; set; } = false;
 
+    /// <summary>
+    /// 主窗口左上角位置（设备像素、虚拟桌面坐标，可为负）。
+    /// null = 从未记录过：首次打开居中；记录后每次打开恢复到用户移动到的位置。
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? WindowLeft { get; set; }
+
+    /// <summary>主窗口左上角 Y 坐标，语义见 <see cref="WindowLeft"/>。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? WindowTop { get; set; }
+
     /// <summary>配置 schema 版本（用于一次性迁移默认行为）。</summary>
     public int ConfigSchemaVersion { get; set; } = 0;
 

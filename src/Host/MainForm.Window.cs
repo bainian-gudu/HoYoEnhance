@@ -239,6 +239,9 @@ internal sealed partial class MainForm : Form
                 // 保证不残留透明（历史路径 / 异常）
                 try { Opacity = 1; } catch { /* ignore */ }
 
+                // 用户可能拖完窗口马上点最小化：隐藏前先落一次位置
+                SaveWindowLocationNow();
+
                 // 先藏窗再摘任务栏：Hide 即时隐藏、无最小化动画；
                 // 且 ShowInTaskbar 变更触发 RecreateHandle 时窗口已不可见，
                 // 不会在左下角造出「最小化图标条」残影。
@@ -411,14 +414,100 @@ internal sealed partial class MainForm : Form
         AppLog.Warn($"EnsureOnScreen reset bounds → {Bounds}");
     }
 
-    /// <summary>记录「屏幕中央」作为托盘恢复位置（按当前窗口尺寸计算）。</summary>
+    /// <summary>
+    /// 记录从托盘恢复时要用的位置：优先用户上次移动到的位置，
+    /// 没有记录（首次运行）才退回屏幕中央。
+    /// </summary>
     private void CaptureRestoreLocation()
     {
+        if (TryGetSavedWindowLocation(out var saved))
+        {
+            _restoreLocation = saved;
+            _hasRestoreLocation = true;
+            return;
+        }
+
         var screen = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1280, 800);
         _restoreLocation = new Point(
             screen.Left + Math.Max(0, (screen.Width - Width) / 2),
             screen.Top + Math.Max(0, (screen.Height - Height) / 2));
         _hasRestoreLocation = true;
+    }
+
+    /// <summary>
+    /// 读取持久化的窗口位置。位置必须与某个屏幕的工作区有交集，
+    /// 避免显示器被拔掉 / 分辨率变化后恢复到看不见的地方。
+    /// </summary>
+    private bool TryGetSavedWindowLocation(out Point location)
+    {
+        location = default;
+        if (_config.WindowLeft is not int left || _config.WindowTop is not int top)
+            return false;
+
+        var probe = new Rectangle(left, top, Math.Max(1, Width), Math.Max(1, Height));
+        // 与 EnsureOnScreen 同一套可见性口径：至少留 40px 在某个工作区内，
+        // 只露出一条边或一个角的位置按「不可见」处理。
+        var visible = Screen.AllScreens.Any(s =>
+        {
+            var wa = s.WorkingArea;
+            return probe.Right > wa.Left + 40 &&
+                   probe.Bottom > wa.Top + 40 &&
+                   probe.Left < wa.Right - 40 &&
+                   probe.Top < wa.Bottom - 40;
+        });
+        if (!visible)
+            return false;
+
+        location = new Point(left, top);
+        return true;
+    }
+
+    /// <summary>
+    /// 记录用户移动后的位置。LocationChanged 在拖动时连发，用定时器合并成一次落盘；
+    /// 托盘 / 最小化 / 屏外坐标不算用户摆放的位置。
+    /// </summary>
+    private void QueueWindowLocationSave()
+    {
+        if (_reallyExit || IsDisposed) return;
+        if (!Visible || _inTray || WindowState != FormWindowState.Normal) return;
+        if (Location.X <= -1000 || Location.Y <= -1000) return;
+        if (_config.WindowLeft == Location.X && _config.WindowTop == Location.Y) return;
+
+        _config.WindowLeft = Location.X;
+        _config.WindowTop = Location.Y;
+
+        if (_windowLocationSaveTimer is null)
+        {
+            _windowLocationSaveTimer = new System.Windows.Forms.Timer { Interval = 600 };
+            _windowLocationSaveTimer.Tick += (_, _) =>
+            {
+                _windowLocationSaveTimer?.Stop();
+                SaveWindowLocationNow();
+            };
+        }
+        _windowLocationSaveTimer.Stop();
+        _windowLocationSaveTimer.Start();
+    }
+
+    /// <summary>立即把当前窗口位置写入配置（托盘隐藏 / 退出前调用，避免节流窗口内丢改动）。</summary>
+    private void SaveWindowLocationNow()
+    {
+        try
+        {
+            _windowLocationSaveTimer?.Stop();
+            if (!Visible || _inTray || WindowState != FormWindowState.Normal) return;
+            if (Location.X <= -1000 || Location.Y <= -1000) return;
+            if (_config.WindowLeft == Location.X && _config.WindowTop == Location.Y) return;
+
+            _config.WindowLeft = Location.X;
+            _config.WindowTop = Location.Y;
+            if (!_config.TrySave(out var err))
+                AppLog.Debug("window location save: " + err);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Debug("window location save failed: " + ex.Message);
+        }
     }
 
     private void NativeActivate()

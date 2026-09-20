@@ -283,6 +283,9 @@ internal sealed partial class MainForm
 
     private void WireWindowEvents()
     {
+        // 用户拖动窗口后记录位置：下次打开 / 从托盘恢复都回到这里，不再强制居中。
+        LocationChanged += (_, _) => QueueWindowLocationSave();
+
         // 标题栏最小化 → 托盘（始终）。优先 WndProc 拦截 SC_MINIMIZE，避免系统最小化动画闪烁；
         // Resize 仅作兜底（例如任务栏「最小化所有窗口」等路径）。
         Resize += (_, _) =>
@@ -322,12 +325,14 @@ internal sealed partial class MainForm
             }
 
             _reallyExit = true;
+            SaveWindowLocationNow();
             // 记录真实关闭原因：用户托盘退出 / WindowsShutdown / TaskManagerClosing 等，
             // 让日志能区分「正常退出」与「无声消失」。
             AppLog.Info($"主窗关闭: reason={e.CloseReason}");
             try { _wakeCts?.Cancel(); } catch { /* ignore */ }
             try { _wakeCts?.Dispose(); } catch { /* ignore */ }
             try { _trayRecoveryTimer?.Stop(); _trayRecoveryTimer?.Dispose(); } catch { /* ignore */ }
+            try { _windowLocationSaveTimer?.Stop(); _windowLocationSaveTimer?.Dispose(); } catch { /* ignore */ }
             try { _trayFollowExitTimer?.Stop(); _trayFollowExitTimer?.Dispose(); } catch { /* ignore */ }
             try { _service.StateChanged -= OnServiceStateForTray; } catch { /* ignore */ }
             try { _tray.Visible = false; } catch { /* ignore */ }
