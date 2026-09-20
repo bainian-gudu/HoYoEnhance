@@ -1,7 +1,7 @@
 import { BookOpen, Info, LayoutGrid, SlidersHorizontal, SquareTerminal } from 'lucide-react';
 import type { Page } from './config';
 
-/** 导航与页面标题常量（App 外壳、侧栏、快捷键共用）。 */
+/** 导航与页面标题常量（App 外壳、侧栏共用）。 */
 export const PAGE_NAMES: Record<Page, string> = { overview: '游戏概览', settings: '游戏设置', logs: '运行日志', guide: '使用指南', about: '关于项目' };
 
 /** 原神 / 崩坏：星穹铁道各自一份的页面：顶部游戏切换器只在这些页面出现。 */

@@ -1,6 +1,6 @@
 import type { ChangeEvent } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { GAME_NAV_ITEMS, PAGE_NAMES, isGamePage } from '../lib/nav';
+import { PAGE_NAMES, isGamePage } from '../lib/nav';
 import type { ToastItem } from '../components/ui';
 import type { GameId, GameProfile, LogEntry, LogLevel, Page, Theme, UnlockerConfig } from '../lib/config';
 import {
@@ -311,7 +311,6 @@ export function useAppState() {
       const target = event.target as HTMLElement;
       if (target.matches('input, textarea, select') || target.isContentEditable || modal) return;
       if ((event.ctrlKey || event.metaKey) && event.key === ',') { event.preventDefault(); navigate('settings'); }
-      if (event.altKey && ['1', '2', '3'].includes(event.key)) { event.preventDefault(); navigate(GAME_NAV_ITEMS[Number(event.key) - 1].page); }
       if (event.key === 'Escape') setSidebarOpen(false);
     };
     window.addEventListener('keydown', onKey);

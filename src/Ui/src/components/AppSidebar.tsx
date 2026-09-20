@@ -1,47 +1,20 @@
 import { motion } from 'framer-motion';
 import { ArrowUpRight, X } from 'lucide-react';
-import { useEffect, useState } from 'react';
 import type { AppState } from '../hooks/useAppState';
 import { GAME_NAV_ITEMS, SHARED_NAV_ITEMS } from '../lib/nav';
 import { Brand } from '../components/Brand';
 import { GameMark } from '../components/GameIcon';
 import { GAME_META, PROJECT_URL } from '../lib/config';
-import type { Page } from '../lib/config';
-import { onNativeNavigate } from '../lib/native';
 
 /**
  * 左侧导航：上半部分跟随当前游戏（概览 / 设置 / 使用指南），下半部分是与游戏无关的页面
  * （运行日志 / 关于项目）。移动端为抽屉。
- *
- * 悬停提示由界面自己渲染：原生 title 气泡在窗口隐藏 / 挪位时不会被收走，
- * 出现过「鼠标不在概览上却弹出 游戏概览 (Alt+1)」的残留气泡。
- * 这里只在真实指针进入导航项时记录，并在窗口失焦、隐藏、切页、抽屉开合时清掉。
+ * 导航项不挂任何悬停气泡：原生 title 与自绘提示都会在窗口挪位 / 隐藏后残留，
+ * 也会盖住右侧内容区；页面名已经写在导航项里，不需要再补一层说明。
  */
 export function AppSidebar({ app }: { app: AppState }) {
   const { page, sidebarOpen, setSidebarOpen, logs, version, sidebarRef, navigate, activeGame } = app;
   const meta = GAME_META[activeGame];
-  const [hint, setHint] = useState<Page | null>(null);
-
-  useEffect(() => {
-    const clearHint = () => setHint(null);
-    window.addEventListener('blur', clearHint);
-    document.addEventListener('visibilitychange', clearHint);
-    // 宿主把窗口收进托盘时会发一次 navigate 复位页面：不管页面是否变化都先收起提示。
-    const offNavigate = onNativeNavigate(clearHint);
-    return () => {
-      window.removeEventListener('blur', clearHint);
-      document.removeEventListener('visibilitychange', clearHint);
-      offNavigate();
-    };
-  }, []);
-
-  // 切页 / 换游戏 / 开关抽屉后指针多半已不在原处，直接收起提示。
-  useEffect(() => { setHint(null); }, [page, activeGame, sidebarOpen]);
-
-  const hintProps = (itemPage: Page) => ({
-    onPointerEnter: () => setHint(itemPage),
-    onPointerLeave: () => setHint((current) => (current === itemPage ? null : current)),
-  });
 
   return (
     <aside ref={sidebarRef} id="app-navigation" className={`sidebar ${sidebarOpen ? 'sidebar-open' : ''}`} aria-label="主导航" role={sidebarOpen ? 'dialog' : undefined} aria-modal={sidebarOpen || undefined}>
@@ -49,27 +22,25 @@ export function AppSidebar({ app }: { app: AppState }) {
       <div className="sidebar-brand-row"><Brand /><button className="icon-button sidebar-close" onClick={() => setSidebarOpen(false)} aria-label="关闭导航"><X size={19} /></button></div>
       <div className="nav-group-label game-group-label"><GameMark game={activeGame} size={17} /><span>{meta.name}</span></div>
       <nav className="primary-nav" aria-label={`${meta.name}页面`}>
-        {GAME_NAV_ITEMS.map(({ page: itemPage, label, icon: Icon }, index) => (
-          <a key={itemPage} href={`#${itemPage}`} aria-label={`${meta.name} · ${label}`} aria-keyshortcuts={`Alt+${index + 1}`} {...hintProps(itemPage)}
+        {GAME_NAV_ITEMS.map(({ page: itemPage, label, icon: Icon }) => (
+          <a key={itemPage} href={`#${itemPage}`} aria-label={`${meta.name} · ${label}`}
             aria-current={page === itemPage ? 'page' : undefined} className={`nav-item ${page === itemPage ? 'active' : ''}`}
             onClick={(event) => { event.preventDefault(); navigate(itemPage); }}>
             {page === itemPage && <motion.span layoutId="active-navigation" className="nav-active-background" transition={{ type: 'spring', stiffness: 400, damping: 36 }} />}
             <Icon size={19} strokeWidth={1.6} /><span>{label}</span>
-            {hint === itemPage && <span className="nav-tooltip" aria-hidden="true">{label} (Alt+{index + 1})</span>}
           </a>
         ))}
       </nav>
-      <div className="sidebar-bottom"><div className="sidebar-constellation" aria-hidden="true"><svg viewBox="0 0 180 130" fill="none"><path d="m12 102 32-30 36 14 29-47 48-23" stroke="currentColor" strokeWidth=".7" /><circle cx="12" cy="102" r="2" fill="currentColor" /><circle cx="44" cy="72" r="3" fill="currentColor" /><circle cx="80" cy="86" r="2" fill="currentColor" /><circle cx="109" cy="39" r="2.5" fill="currentColor" /><path d="m157 9 2 5 5 2-5 2-2 5-2-5-5-2 5-2 2-5Z" fill="currentColor" /><circle cx="72" cy="30" r="1" fill="currentColor" /><circle cx="145" cy="76" r="1" fill="currentColor" /></svg></div>
+      <div className="sidebar-bottom">
         <div className="nav-group-label shared-group-label">共享</div>
         <nav className="secondary-nav" aria-label="共享页面">
           {SHARED_NAV_ITEMS.map(({ page: itemPage, label, icon: Icon }) => (
-            <a href={`#${itemPage}`} key={itemPage} aria-label={label} {...hintProps(itemPage)}
+            <a href={`#${itemPage}`} key={itemPage} aria-label={label}
               aria-current={page === itemPage ? 'page' : undefined} className={`nav-item ${page === itemPage ? 'active' : ''}`}
               onClick={(event) => { event.preventDefault(); navigate(itemPage); }}>
               {page === itemPage && <motion.span layoutId="active-navigation" className="nav-active-background" />}
               <Icon size={18} strokeWidth={1.6} /><span>{label}</span>
               {itemPage === 'logs' && logs.length > 0 && <span className="nav-count">{logs.length > 99 ? '99+' : logs.length}</span>}
-              {hint === itemPage && <span className="nav-tooltip" aria-hidden="true">{label}</span>}
             </a>
           ))}
         </nav>

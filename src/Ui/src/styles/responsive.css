@@ -136,7 +136,6 @@
   .brand-wordmark > span { font-size: 8.5px; letter-spacing: 1.9px; }
   .sidebar-close { display: flex; margin-left: auto; width: 26px; }
   .nav-item { font-size: 12.5px; min-height: 45px; }
-  .sidebar-constellation { height: 130px; }
   .sidebar-version { font-size: 10px; margin-left: 24px; margin-right: 24px; }
   .main-pane { margin-left: 0; }
   .mobile-menu-button { display: flex; margin-left: -5px; }
@@ -258,7 +257,6 @@
 }
 
 @media (max-height: 780px) and (min-width: 861px) {
-  .sidebar-constellation { height: 105px; }
   .main-content { padding-top: 24px; }
   .page-heading { margin-bottom: 20px; }
   .overview-hero { min-height: 211px; }
@@ -266,15 +264,9 @@
   .hero-guide { margin-top: 20px; }
 }
 
-/* 窗口越矮，装饰星图越先让位、纵向留白越紧：高 DPI 缩放下的默认 / 最小窗口
-   （1180×760、960×640 折算后约 580 / 430 CSS px 高）也要保证左下角版本号与
-   MIT License 行完整落在窗口内，并保留自己的底部间距。 */
-@media (max-height: 700px) {
-  .sidebar-constellation { height: 72px; }
-}
-
-@media (max-height: 640px) {
-  .sidebar-constellation { display: none; }
+/* 窗口越矮，侧栏纵向留白越紧：保证左下角版本号与 MIT License 行完整落在
+   窗口内，并保留自己的底部间距（最小窗口高度下不会触发，主要给网页预览兜底）。 */
+@media (max-height: 540px) {
   .sidebar-brand-row { min-height: 78px; padding-top: 18px; padding-bottom: 14px; }
   .nav-group-label { margin-top: 15px; margin-bottom: 9px; }
   .nav-item { min-height: 40px; }
@@ -284,7 +276,7 @@
   .sidebar-bottom { padding-bottom: 23px; }
 }
 
-@media (max-height: 560px) {
+@media (max-height: 470px) {
   .sidebar-brand-row { min-height: 68px; padding-top: 14px; padding-bottom: 10px; }
   .nav-group-label { margin-top: 12px; margin-bottom: 8px; }
   .primary-nav, .secondary-nav { gap: 4px; }
@@ -294,7 +286,7 @@
   .sidebar-bottom { padding-bottom: 22px; }
 }
 
-@media (max-height: 480px) {
+@media (max-height: 410px) {
   .sidebar-brand-row { min-height: 62px; padding-top: 12px; padding-bottom: 10px; }
   .nav-group-label { margin-top: 10px; margin-bottom: 6px; }
   .nav-item { min-height: 35px; }
