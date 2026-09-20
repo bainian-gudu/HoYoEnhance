@@ -89,8 +89,17 @@ internal sealed partial class UiBridge
 
             case "exportConfig":
             {
-                var json = JsonSerializer.Serialize(BuildConfigDto(), JsonOpts);
-                return Task.FromResult<object?>(new { json, fileName = "config.json" });
+                // 目录选择与写盘都要落在 UI 线程上：弹框是模态的，写盘失败也直接回给前端。
+                var json = JsonSerializer.Serialize(BuildConfigDto(), ExportJsonOpts) + Environment.NewLine;
+                var exported = ConfigExportResult.Fail("导出未执行");
+                _form.Invoke(() => { exported = ConfigExport.ExportWithDialog(_form, json); });
+                if (exported.Ok) AppLog.Info("config exported to " + exported.Path);
+                return Task.FromResult<object?>(new
+                {
+                    ok = exported.Ok,
+                    path = exported.Path,
+                    detail = exported.Detail,
+                });
             }
 
             case "importConfig":

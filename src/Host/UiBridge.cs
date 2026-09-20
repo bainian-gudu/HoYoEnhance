@@ -19,6 +19,14 @@ internal sealed partial class UiBridge : IDisposable
         WriteIndented = false,
     };
 
+    /// <summary>导出到磁盘的 config.json：字段与前端 DTO 一致，缩进便于用户直接查看和改。</summary>
+    private static readonly JsonSerializerOptions ExportJsonOpts = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        WriteIndented = true,
+    };
+
     private readonly AppConfig _config;
     private readonly UnlockService _service;
     private readonly MainForm _form;

@@ -505,11 +505,17 @@ export function useAppState() {
   async function exportConfig() {
     try {
       if (native) {
-        const result = await nativeInvoke<{ json: string; fileName: string }>('exportConfig');
-        downloadFile(result.json, result.fileName);
-      } else {
-        downloadFile(`${JSON.stringify(config, null, 2)}\n`, 'config.json');
+        // 桌面版由宿主弹出目录选择框并把 config.json 写进去；取消不算失败。
+        const result = await nativeInvoke<{ ok: boolean; path?: string; detail?: string }>('exportConfig');
+        if (!result.ok) {
+          if (result.detail && result.detail !== '已取消') notify('导出失败', result.detail, 'error');
+          return;
+        }
+        notify('配置已导出', result.path);
+        addLog('Info', `已导出配置：${result.path}`);
+        return;
       }
+      downloadFile(`${JSON.stringify(config, null, 2)}\n`, 'config.json');
       notify('配置已导出');
       addLog('Info', '已导出 config.json。');
     } catch (error) {

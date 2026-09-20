@@ -11,6 +11,7 @@ internal static class Program
         TrayGameFollowStateTests.Run(harness);
         RunningSessionTrackerTests.Run(harness);
         AutostartTests.Run(harness);
+        ConfigExportTests.Run(harness);
         return harness.Report();
     }
 }
