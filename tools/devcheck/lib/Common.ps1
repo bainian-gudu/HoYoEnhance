@@ -117,14 +117,9 @@ function Restore-RepoFile {
 
 # -SelfTest 注入过的仓库内文件；下一次运行（哪怕上一次是被杀掉）先按它清场。
 $script:SelfTestRepoFiles = @(
-    '.gitmodules',
     '.github/workflows/zz-devcheck-selftest.yml',
-    'installer/kachina/src/devcheck-selftest-telemetry.ts',
-    'installer/kachina/src-tauri/src/utils/mod.rs',
-    'installer/kachina/src-tauri/Cargo.toml',
-    'installer/kachina/src-tauri/src/installer/registry.rs',
-    'installer/kachina/vendor/rcedit-rs/rcedit-sys/src/rescle.cc',
-    'tools/ci/Import-DevCmd.ps1',
+    'packaging/pack.ps1',
+    'packaging/packaging.config.json',
     'src/Host/ProcessRunner.cs',
     'src/Host/GameLocator.Helpers.cs'
 )

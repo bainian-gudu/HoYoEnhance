@@ -4,7 +4,7 @@ namespace GenshinFpsUnlocker.Host;
 /// 进程入口：单实例、运行时检测、启动监视服务与主窗体。
 /// 清单为 asInvoker：非管理员日常启动不弹 UAC，必须能显示主窗 + 托盘。
 ///
-/// 安装 / 卸载只有一种实现：Kachina 安装器（installer/ 打包出的安装包，
+/// 安装 / 卸载只有一种实现：Kachina 安装器（packaging/ 打包出的安装包，
 /// 安装目录内自带卸载程序与更新程序）。
 /// 宿主自身不再提供 --install / --uninstall、Uninstall.cmd 垫片、自写 ARP 卸载项、
 /// 内置白名单删目录等任何「第二种安装卸载方式」；本进程也不会为安装目的主动提权。

@@ -1,12 +1,14 @@
 <#
 .SYNOPSIS
-    用项目内的 kachina-installer 把 dist\ 打成安装器 / 更新器 / 便携包。
+    用 Kirara 项目构建出的 kirara-builder 把 dist\ 打成安装器 / 更新器 / 便携包。
 
 .DESCRIPTION
-    这是本仓库唯一的打包入口。步骤与上游 README 一致：
-      1. kachina-builder pack -c kachina.config.json -o <app>\<更新程序>.exe
-      2. kachina-builder gen  -i <appDir> -m metadata.json -o hashed -r <repoId> -t <ver> -u <updater>
-      3. kachina-builder pack -c kachina.config.json -m metadata.json -d hashed -o <app>.Install.<ver>.exe
+    这是本仓库唯一的打包入口。安装器工具链（kachina 源码快照 + kirara-builder）
+    已拆到独立项目 Kirara（默认取同级目录 ..\Kirara），本脚本只负责本项目的载荷与配置。
+    步骤与上游 README 一致：
+      1. kirara-builder pack -c packaging.config.json -o <app>\<更新程序>.exe
+      2. kirara-builder gen  -i <appDir> -m metadata.json -o hashed -r <repoId> -t <ver> -u <updater>
+      3. kirara-builder pack -c packaging.config.json -m metadata.json -d hashed -o <app>.Install.<ver>.exe
 
     产物统一落到 artifacts\：
       <HoYoEnhance 安装包>.exe        离线安装器（含 uninst / update）
@@ -22,15 +24,18 @@
 .PARAMETER Version
     版本号；留空则从 src\Host\GenshinFpsUnlocker.Host.csproj 的 <Version> 读取。
 
-.PARAMETER SkipKachinaBuild
-    不自动构建 kachina-builder（要求 installer\tools\kachina-builder.exe 已存在）。
+.PARAMETER KiraraRepo
+    Kirara 项目路径（含安装器源码与 build.ps1），默认同级目录 ..\Kirara。
 
-.PARAMETER ForceKachinaBuild
-    强制重新构建 kachina-builder。
+.PARAMETER BuilderPath
+    直接指定 kirara-builder.exe，给出后不再查找 / 构建 Kirara。
+
+.PARAMETER SkipBuilderBuild
+    不自动构建 kirara-builder（要求目标位置已有该 exe）。
 
 .EXAMPLE
     pwsh build.ps1 -SkipSetup      # 只编译
-    pwsh installer/pack.ps1        # 只打包（需要 tools\kachina-builder.exe 或本机具备 Rust/pnpm）
+    pwsh packaging/pack.ps1        # 只打包（需要 ..\Kirara 或 -BuilderPath）
     pwsh build.ps1                 # 编译 + 打包（内部调用本脚本）
 #>
 [CmdletBinding()]
@@ -40,22 +45,23 @@ param(
     [string]$Version = "",
     [string]$RepoId = "bainian-gudu/HoYoEnhance",
     [int]$Jobs = 6,
-    [switch]$SkipKachinaBuild,
-    [switch]$ForceKachinaBuild
+    [string]$KiraraRepo = "",
+    [string]$BuilderPath = "",
+    [switch]$SkipBuilderBuild
 )
 
 $ErrorActionPreference = "Stop"
 
-$InstallerDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$RepoRoot     = Split-Path -Parent $InstallerDir
+$PackagingDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$RepoRoot     = Split-Path -Parent $PackagingDir
 $AppName      = "HoYoEnhance"
 $LegacyAppName = "GenshinFpsUnlocker"
-$Config       = Join-Path $InstallerDir "kachina.config.json"
-$ToolsDir     = Join-Path $InstallerDir "tools"
-$Builder      = Join-Path $ToolsDir "kachina-builder.exe"
+$Config       = Join-Path $PackagingDir "packaging.config.json"
 
 if (-not $DistDir) { $DistDir = Join-Path $RepoRoot "dist" }
 if (-not $OutDir)  { $OutDir  = Join-Path $RepoRoot "artifacts" }
+if (-not $KiraraRepo) { $KiraraRepo = Join-Path (Split-Path -Parent $RepoRoot) "Kirara" }
+$Builder = if ($BuilderPath) { $BuilderPath } else { Join-Path $KiraraRepo "tools\kirara-builder.exe" }
 
 function Step([string]$msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 function Ok([string]$msg)   { Write-Host "    $msg" -ForegroundColor Green }
@@ -128,24 +134,26 @@ if (-not $Version) {
 }
 Write-Host "==> 版本 $Version / 仓库 $RepoId" -ForegroundColor Cyan
 
-# ------------------------------------------------------------------ kachina-builder
-if ($SkipKachinaBuild) {
-    if (-not (Test-Path $Builder)) {
-        throw "installer\tools\kachina-builder.exe 不存在，且指定了 -SkipKachinaBuild"
+# ------------------------------------------------------------------ kirara-builder（来自 Kirara）
+if ($SkipBuilderBuild) {
+    if (-not (Test-Path -LiteralPath $Builder)) {
+        throw "kirara-builder.exe 不存在：$Builder（去掉 -SkipBuilderBuild，或用 -BuilderPath 指定）"
     }
 } else {
-    # 交给 build-kachina.ps1 判断：builder 缺失、或 kachina 源码比它新才重建
-    Step "检查 / 构建项目内 kachina-builder（installer\kachina）"
-    $buildArgs = @{}
-    if ($ForceKachinaBuild) { $buildArgs.Force = $true }
-    & (Join-Path $InstallerDir "build-kachina.ps1") @buildArgs | Out-Null
+    $kiraraBuild = Join-Path $KiraraRepo "build.ps1"
+    if (-not (Test-Path -LiteralPath $kiraraBuild)) {
+        throw "找不到 Kirara 的构建脚本：$kiraraBuild（用 -KiraraRepo 指定 Kirara 路径，或用 -BuilderPath 直接给出 kirara-builder.exe）"
+    }
+    # 交给 Kirara 的脚本判断：builder 缺失、或源码比它新才重建
+    Step "检查 / 构建 kirara-builder（$KiraraRepo）"
+    & $kiraraBuild | Out-Null
 }
-if (-not (Test-Path $Builder)) { throw "kachina-builder.exe 构建失败：$Builder" }
-Ok("kachina-builder: $Builder")
+if (-not (Test-Path -LiteralPath $Builder)) { throw "kirara-builder.exe 不可用：$Builder" }
+Ok("kirara-builder: $Builder")
 
 # ------------------------------------------------------------------ 暂存应用目录
 # 注意不要用 build\（Windows 大小写不敏感，会和历史 Build\ 目录冲突）
-$Work   = Join-Path $RepoRoot "out\kachina-pack"
+$Work   = Join-Path $RepoRoot "out\pack"
 $AppDir = Join-Path $Work $AppName
 if (Test-Path $Work) { Remove-Item $Work -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $AppDir | Out-Null

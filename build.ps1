@@ -3,7 +3,8 @@
 #   - 应用 DLL / Stub（静态 CRT + 内嵌 MinHook）等 → 打进安装载荷（自带）
 #   - 无 Node / Python 等语言运行时依赖
 #   - .NET Desktop Runtime / VCRedist → Kachina 安装器按 runtimes 配置处理
-# 安装器：只有一种 —— Kachina（installer/kachina 源码快照 → kachina-builder）
+# 安装器：只有一种 —— Kachina。工具链（kachina 源码快照 → kachina-builder）已拆到
+#         独立项目 Kirara（默认同级目录 ..\Kirara），本项目只保留配置与打包脚本
 #         产物 <HoYoEnhance 安装包>.exe，安装目录含 uninst.exe / update.exe
 #         宿主自身不再有 --install / --uninstall 等任何自带安装卸载路径
 # 默认：主程序 FDD（包体小）。离线全量：.\build.ps1 -SelfContained
@@ -13,10 +14,10 @@
 #   .\build.ps1 -Configuration Release
 #   .\build.ps1 -SelfContained
 #   .\build.ps1 -SkipSetup          # 只编 Host/Stub/UI，不打包
-#   .\build.ps1 -SkipKachinaBuild   # 打包，但要求 installer\tools\kachina-builder.exe 已存在
-#   .\build.ps1 -ForceKachinaBuild  # 强制重建 kachina-builder
+#   .\build.ps1 -KiraraRepo ..\Kirara  # 指定 Kirara 项目路径（默认就是同级 ..\Kirara）
+#   .\build.ps1 -SkipBuilderBuild   # 打包，但要求 kachina-builder.exe 已存在
 #   .\build.ps1 -Install            # 编完后启动 Install.exe（若已生成）
-#   .\installer\pack.ps1            # 只打包（dist\ 已存在时）
+#   .\packaging\pack.ps1            # 只打包（dist\ 已存在时）
 
 param(
     [ValidateSet("Debug", "Release")]
@@ -25,8 +26,9 @@ param(
     [switch]$Install,
     [switch]$SelfContained,
     [switch]$SkipSetup,
-    [switch]$SkipKachinaBuild,
-    [switch]$ForceKachinaBuild
+    [string]$KiraraRepo = "",
+    [string]$BuilderPath = "",
+    [switch]$SkipBuilderBuild
 )
 
 $ErrorActionPreference = "Stop"
@@ -178,16 +180,17 @@ if (Test-Path $iconWebp) {
 
 $installExePath = $null
 if (-not $SkipSetup) {
-    Write-Host "==> Packaging Kachina installer (installer/pack.ps1)" -ForegroundColor Cyan
-    # 打包全部逻辑（含 kachina-builder 的构建）都在 installer/ 下，这里只做转发
+    Write-Host "==> Packaging installer (packaging/pack.ps1)" -ForegroundColor Cyan
+    # 打包逻辑在 packaging/pack.ps1（安装器工具链在 Kirara），这里只做转发
     $packArgs = @{
         DistDir = $dist
         OutDir  = (Join-Path $Root "artifacts")
     }
-    if ($SkipKachinaBuild)  { $packArgs.SkipKachinaBuild  = $true }
-    if ($ForceKachinaBuild) { $packArgs.ForceKachinaBuild = $true }
-    & (Join-Path $Root "installer/pack.ps1") @packArgs
-    if ($LASTEXITCODE -ne 0) { throw "installer/pack.ps1 failed" }
+    if ($KiraraRepo)        { $packArgs.KiraraRepo       = $KiraraRepo }
+    if ($BuilderPath)       { $packArgs.BuilderPath      = $BuilderPath }
+    if ($SkipBuilderBuild)  { $packArgs.SkipBuilderBuild = $true }
+    & (Join-Path $Root "packaging/pack.ps1") @packArgs
+    if ($LASTEXITCODE -ne 0) { throw "packaging/pack.ps1 failed" }
 
     $installExePath = Get-ChildItem (Join-Path $Root "artifacts") `
         -Filter "HoYoEnhance.Install.*.exe" -File -ErrorAction SilentlyContinue |
@@ -210,7 +213,7 @@ if ($Install) {
             Select-Object -First 1 -ExpandProperty FullName
     }
     if (-not $gui -or -not (Test-Path $gui)) {
-        throw "Install exe missing: 去掉 -SkipSetup 重跑，或确认 installer\tools\kachina-builder.exe 可用"
+        throw "Install exe missing: 去掉 -SkipSetup 重跑，或确认 kachina-builder.exe（Kirara）可用"
     }
     Write-Host "==> Launching installer..." -ForegroundColor Cyan
     Start-Process -FilePath $gui -WorkingDirectory (Split-Path $gui) -Verb RunAs -Wait

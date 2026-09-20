@@ -56,38 +56,13 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          # 两个 lockfile 都要缓存：devcheck 前端层 + Web UI 构建
-          cache-dependency-path: |
-            tools/devcheck/front/package-lock.json
-            src/Ui/package-lock.json
+          cache-dependency-path: src/Ui/package-lock.json
 
-      # windows-latest 的 MSVC 工具链自带该 target；ubuntu 需要显式安装
-      - name: Install windows-msvc rust target
-        if: runner.os == 'Linux'
-        shell: pwsh
-        run: rustup target add x86_64-pc-windows-msvc
-
-      # native 层要用 cl.exe 真编 vendored rcedit-sys 的 C++（rescle.cc / librcedit.cpp）。
-      # 不注入 MSVC 开发环境时该层会自动 SKIP，不算失败。
-      - name: Add MSVC Developer environment
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: tools/ci/Import-DevCmd.ps1 -Arch x64
-
-      - name: Cache cargo (devcheck crates)
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            tools/devcheck/rust/typecheck
-            tools/devcheck/rust/logic
-          cache-targets: true
-          key: devcheck
-
-      # vendor 层断言：kachina 只从本仓库的源码快照构建，工作流与打包脚本里
-      # 没有任何从上游仓库拉源码 / 下二进制的动作（详见 tools/devcheck/README.md）。
+      # vendor 层断言：安装器工具链只在独立项目 Kirara，本仓库不再内嵌 kachina
+      # 源码、也没有任何从外部拉源码 / 下二进制的动作（详见 tools/devcheck/README.md）。
       # 单独跑一次，让这条约束在日志里有独立、显眼的结论。
       # 注意：本文件的注释里不要写上游仓库名，vendor 层会扫工作流文件。
-      - name: Vendored source guard
+      - name: Installer toolchain guard
         shell: pwsh
         run: pwsh -NoProfile -File ./tools/devcheck/devcheck.ps1 -Layer vendor
 

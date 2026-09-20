@@ -54,15 +54,15 @@
 | 宿主主程序 | C# / .NET 9（`net9.0-windows10.0.17763.0`）/ WinForms | `src/Host/`：WebView2 承载 Web UI、系统托盘、自绘标题栏、注入调度、游戏定位、配置与日志 |
 | Web UI | React 19 + TypeScript 5.9 + Vite 7 + Tailwind CSS 4 + framer-motion + lucide-react | `src/Ui/`：设计稿由 **gpt-6-astra-max** 设计、按稿 1:1 实现；`vite-plugin-singlefile` 打成单文件 `ui/index.html` |
 | 注入模块 | C++20（CMake）+ MinHook（BSD-2-Clause），CRT 静态链接（`/MT`） | `src/Stub/`：原神的帧率解锁与反虚化；`src/StubStarRail/`：星铁的反角色虚化与隐藏 UID（`StarRailStub.dll`，帧率仍走注册表）；两者只共用 `src/Common/` 的扫描器与 IPC 协议，业务代码相互独立 |
-| 安装 / 卸载 / 更新器 | Kachina：Rust + Tauri 2（nightly + `-Z build-std`）+ Vue 3.5 + Rsbuild | `installer/kachina/`：上游源码快照（tag `0.5.1`），本地修改清单见 `installer/kachina/LOCAL_PATCHES.md` |
-| exe 图标 / 版本资源写入 | vendored `rcedit-rs`（C++，MSVC 编译） | `installer/kachina/vendor/rcedit-rs/`，与上游差异见其 `LOCAL_PATCHES.md` |
-| 构建 / 打包 / 自检 | PowerShell 7 | `build.ps1`、`installer/pack.ps1`、`installer/build-kachina.ps1`、`tools/devcheck/` |
+| 安装 / 卸载 / 更新器 | Kachina：Rust + Tauri 2（nightly + `-Z build-std`）+ Vue 3.5 + Rsbuild | 独立项目 [Kirara](https://github.com/bainian-gudu/Kirara)：上游源码快照（tag `0.5.1`）+ 本地修改，产出 `kirara-builder.exe` |
+| exe 图标 / 版本资源写入 | vendored `rcedit-rs`（C++，MSVC 编译） | Kirara 的 `vendor/rcedit-rs/`，与上游差异见其 `LOCAL_PATCHES.md` |
+| 构建 / 打包 / 自检 | PowerShell 7 | `build.ps1`、`packaging/pack.ps1`、`tools/devcheck/` |
 | CI | GitHub Actions（`ubuntu-latest` + `windows-latest`） | `devcheck.yml`（push/PR 自动）、`build.yml`（仅手动） |
 
 ## 构建
 
-默认构建主程序和安装器。安装器由项目内 Kachina 源码构建出的 `kachina-builder.exe`
-生成，打包代码集中在 [`installer/`](installer/)。
+默认构建主程序和安装器。安装器由独立项目 Kirara 从源码构建出的 `kirara-builder.exe`
+生成，本仓库的打包配置与脚本集中在 [`packaging/`](packaging/)。
 
 > 说明：当前主程序、安装包、便携包、快捷方式、界面与窗口标题统一为 **HoYoEnhance**。
 > 为兼容老用户升级与卸载，数据目录、卸载注册表键、IPC / 自启动任务等内部标识仍保留
@@ -74,24 +74,25 @@
 # 仅编译 UI + Stub + 主程序（不打包）
 .\build.ps1 -Configuration Release -SkipSetup
 
-# 完整：编译 + 打包 Kachina 离线安装器（首次会从源码构建 kachina-builder）
+# 完整：编译 + 打包 Kachina 离线安装器（首次会调 Kirara 的 build.ps1）
 .\build.ps1 -Configuration Release
 
 # 只重新打包（dist\ 已存在）
-.\installer\pack.ps1
+.\packaging\pack.ps1
 
-# kachina-builder 已构建过 / 强制重建
-.\build.ps1 -SkipKachinaBuild
-.\build.ps1 -ForceKachinaBuild
+# kirara-builder 已构建过 / 指定 Kirara 位置
+.\build.ps1 -SkipBuilderBuild
+.\build.ps1 -KiraraRepo D:\src\Kirara
 
 # 可选：主程序也自包含
 .\build.ps1 -Configuration Release -SelfContained
 ```
 
 只修改前端时可在 `src/Ui` 执行 `npm ci` 后运行 `npm run build`；只修改安装器前端时，
-在 `installer/kachina` 执行 `pnpm install --frozen-lockfile` 后运行 `pnpm exec rsbuild build`。
+在 Kirara 仓库根执行 `pnpm install --frozen-lockfile` 后运行 `pnpm exec rsbuild build`。
 
-完整的安装器依赖、目录和打包流程见 [`installer/README.md`](installer/README.md)。
+本仓库的打包流程与配置项见 [`packaging/README.md`](packaging/README.md)；
+安装器源码、依赖与构建步骤见 Kirara 的 `README.md`。
 
 产物：
 
@@ -106,14 +107,15 @@ artifacts\HoYoEnhance-portable-win-x64.zip            # 便携包（含更新程
 artifacts\HoYoEnhance_v<版本>.7z                      # 便携 7z（本机有 7-Zip 时）
 ```
 
-Kachina 配置见 [`installer/kachina.config.json`](installer/kachina.config.json)
+打包配置见 [`packaging/packaging.config.json`](packaging/packaging.config.json)
 （默认安装目录、GitHub 在线源、运行库列表）。
-上游源码快照的来源、版本与构建前置见 [`installer/kachina/UPSTREAM.md`](installer/kachina/UPSTREAM.md)。
+上游源码快照的来源、版本与构建前置见 Kirara 的 `UPSTREAM.md`。
 
 ## 开发自检（devcheck）
 
-`installer/kachina` 是 Tauri + Windows 专用子项目，完整构建一次要几分钟；
-`tools/devcheck` 把**我们真正改过的那部分**放进最小依赖的检查环境，热跑 6–12 秒。
+安装器工具链（Kirara）是 Tauri + Windows 专用项目，完整构建一次要几分钟；
+本仓库的 `tools/devcheck` 把**我们真正改过的那部分**（Web UI + Stub + Host + 打包配置）
+放进最小依赖的检查环境，热跑 5–10 秒。
 
 ```powershell
 pwsh tools/devcheck/devcheck.ps1                 # all
@@ -167,8 +169,8 @@ pwsh tools/devcheck/devcheck.ps1 -SelfTest       # 注入错误，确认每层�
   不碰盘符根与 `Program Files` 这类受保护目录），命中的只记日志并跳过，不会让卸载失败。
 
 已知边界：被 OneDrive 重定向过的 `文档` / `AppData` 只能命中当前用户那一份。
-逐条实现与断言见 [`installer/kachina/LOCAL_PATCHES.md`](installer/kachina/LOCAL_PATCHES.md)
-第 3、6 节与 [`installer/README.md`](installer/README.md)。
+逐条实现与断言见 Kirara 的 `LOCAL_PATCHES.md` 第 3、6 节与
+[`packaging/README.md`](packaging/README.md)。
 
 在线更新：已安装副本可使用安装目录中的更新程序，从配置的 GitHub Release 源拉取（需已发布对应安装包）。
 
@@ -241,18 +243,19 @@ pwsh tools/devcheck/devcheck.ps1 -SelfTest       # 注入错误，确认每层�
 | 工作流 | 触发 | 内容 | 耗时 |
 | --- | --- | --- | --- |
 | **Devcheck**（`.github/workflows/devcheck.yml`） | push 到 main / PR / 手动，**自动执行** | `tools/devcheck` 全部检查层 + 自检 + Web UI 构建，ubuntu 与 windows 双 runner | 几分钟 |
-| **Build**（`.github/workflows/build.yml`） | **仅手动**（Actions → Build → Run workflow） | kachina-builder + 应用本体 + 打包安装器 | 十几分钟起 |
+| **Build**（`.github/workflows/build.yml`） | **仅手动**（Actions → Build → Run workflow） | 按 `kirara_ref` 检出 Kirara → 从源码构建 `kirara-builder` → 应用本体 → 打包安装器 | 十几分钟起 |
 
-Kachina **只从本仓库的 `installer/kachina/` 源码快照构建**：CI 与打包脚本都不从上游拉源码
-或下载二进制，唯一带 C++ 的依赖 `rcedit-rs` 也已 vendored 进仓库。这条约束由 devcheck 的
-`vendor` 层自动断言（同一层还断言遥测没有被加回来），细节见
-[`installer/kachina/UPSTREAM.md`](installer/kachina/UPSTREAM.md) 与
+Kachina **只从独立项目 Kirara 的固定 ref 源码构建**：本仓库的 CI 与打包脚本都不从上游拉源码、
+也不下载现成二进制，检出 Kirara 后由它的 `build.ps1` 现场构建 `kirara-builder.exe`
+（唯一带 C++ 的依赖 `rcedit-rs` 在 Kirara 里 vendored）。这条约束由 devcheck 的 `vendor`
+层自动断言，细节见 Kirara 的 `UPSTREAM.md` 与
 [`tools/devcheck/README.md`](tools/devcheck/README.md)。
 
-**Build** 依次跑 `build-kachina`（源码 → `kachina-builder.exe`，源码未变时命中缓存，
-输入 `rebuild_kachina=true` 可强制重建，重建后的产物照常写回缓存）→ `build-app` → `pack`，可选
-`host_mode=self-contained` 打全量自包含主程序；产物与本地构建一致，挂在 Release 上。
-把 `Install` 包发布到 Release 且 tag 为 `v{version}` 后，配置里的 GitHub 在线源即可用于更新器。
+**Build** 依次跑 `build-builder`（按输入 `kirara_ref` 检出 Kirara → 从源码构建
+`kirara-builder.exe`，源码未变时命中缓存，输入 `rebuild_builder=true` 可强制重建）→
+`build-app` → `pack`，可选 `host_mode=self-contained` 打全量自包含主程序；产物与本地构建
+一致，挂在 Release 上。把 `Install` 包发布到 Release 且 tag 为 `v{version}` 后，配置里的
+GitHub 在线源即可用于更新器。
 
 ## 隐私与遥测
 
@@ -271,7 +274,7 @@ Kachina **只从本仓库的 `installer/kachina/` 源码快照构建**：CI 与�
 仍然会发生的网络请求（都是功能本身，且由您触发）：
 
 - **安装 / 更新**：从 GitHub Releases 下载安装包（地址见
-  `installer/kachina.config.json` 的 `source`）。
+  `packaging/packaging.config.json` 的 `source`）。
 - **缺失的运行库**：`builds.dotnet.microsoft.com`（.NET Desktop Runtime 9）、
   `aka.ms/vs/17/release/vc_redist.x64.exe`（VC++ 运行库）、
   `go.microsoft.com/fwlink/p/`（WebView2 引导器）。
@@ -280,8 +283,8 @@ Kachina **只从本仓库的 `installer/kachina/` 源码快照构建**：CI 与�
 - 本地日志与配置写在用户数据目录，不上传。
 
 删除清单、保留项（`InfoFilter`、本地耗时统计 `networkInsights.ts`）与 lock 重新生成的
-细节见 [`installer/kachina/LOCAL_PATCHES.md`](installer/kachina/LOCAL_PATCHES.md) 第 7 节；
-`tools/devcheck` 的 `vendor` 层第 8 组断言会在遥测被加回来时直接失败（含 3 个自检注入）。
+细节见 Kirara 的 `LOCAL_PATCHES.md` 第 7 节；Kirara 的 `tools/devcheck` `vendor` 层第 8 组
+断言会在遥测被加回来时直接失败（含 3 个自检注入）。
 
 ## 用户协议与安全说明
 
@@ -310,7 +313,7 @@ Kachina **只从本仓库的 `installer/kachina/` 源码快照构建**：CI 与�
   验证微软签名 —— 签名无效或签名者不是微软就删掉文件并提示手动下载。
 - **安装器与提权进程之间的通道**：只允许本用户、SYSTEM 与管理员访问，其他本地程序
   （包括沙箱进程）连不进来。
-- 逐条实现记录（面向开发者）见 [`installer/kachina/LOCAL_PATCHES.md`](installer/kachina/LOCAL_PATCHES.md)。
+- 逐条实现记录（面向开发者）见 Kirara 的 `LOCAL_PATCHES.md`。
 
 ## 参考、素材与版权
 
@@ -321,7 +324,8 @@ Kachina **只从本仓库的 `installer/kachina/` 源码快照构建**：CI 与�
   [DGP Studio 的 Snap.Hutao.Remastered.UnlockerIsland](https://github.com/SnapHutaoRemasteringProject/Snap.Hutao.Remastered.UnlockerIsland)（MIT），
   已改编为特征码自适配扫描并整合进 `src/Stub/AntiBlur.cpp` 与 `src/Stub/HideUid.cpp`。
 - 安装 / 卸载 / 更新器整体方案来自 [YuehaiTeam/kachina-installer](https://github.com/YuehaiTeam/kachina-installer)
-  （源码快照见 `installer/kachina/`，版本与来源见 `installer/kachina/UPSTREAM.md`）。
+  （源码快照在独立项目 [Kirara](https://github.com/bainian-gudu/Kirara)，
+  版本与来源见其 `UPSTREAM.md`）。
 - 应用图标等图片素材取自 [babalae/better-genshin-impact](https://github.com/babalae/better-genshin-impact)
   （GPL-3.0），逐文件路径见下文「图片与素材来源」。
 - 其余实现层面的参考（上游 issue、MSVC/Windows 行为变更等）一律记在对应目录的
@@ -335,8 +339,8 @@ Kachina **只从本仓库的 `installer/kachina/` 源码快照构建**：CI 与�
 | `src/Host/Assets/app.webp`、`src/Ui/public/favicon.webp` | 应用图标（绮良良抱纸箱）的位图版本，源图同上 | [babalae/better-genshin-impact](https://github.com/babalae/better-genshin-impact) 的 `BetterGenshinImpact/Resources/Images/logo.png` / `Build/micasetup/Favicon.png`，由 `tools/to-webp.mjs` 转成 WebP | 素材随 BetterGI（**GPL-3.0**）；角色形象 © 米哈游 |
 | `src/Host/Assets/app.ico` | 应用图标（多尺寸 ICO）：窗体 / 托盘 / 快捷方式 / exe 资源 | BetterGI 的 `logo.ico`；**Windows 图标 API 只认 ICO，不能换成 WebP** | 同上 |
 | `src/Host/Assets/favicon.webp` | 同一形象的安装包图标位图变体 | BetterGI 的 `Build/micasetup/Favicon.ico` 转 WebP | 同上 |
-| `installer/kachina/src-tauri/icons/icon.ico` | 安装器 / 卸载器 exe 图标 | 上游 kachina-installer 自带（与 tag `0.5.1` 一致）；该文件本身又与 BetterGI `Build/micasetup/FaviconSetup.ico` 同字节 | 同上 |
-| `installer/kachina/src/left.webp` | 安装器左侧立绘：绮良良同款立绘 | 上游 kachina-installer 自带（与 tag `0.5.1` 逐字节一致，未改动） | 上游仓库素材（上游未提供 LICENSE） |
+| Kirara 的 `src-tauri/icons/icon.ico` | 安装器 / 卸载器 exe 图标 | 上游 kachina-installer 自带（与 tag `0.5.1` 一致）；该文件本身又与 BetterGI `Build/micasetup/FaviconSetup.ico` 同字节 | 同上 |
+| Kirara 的 `src/left.webp` | 安装器左侧立绘：绮良良同款立绘 | 上游 kachina-installer 自带（与 tag `0.5.1` 逐字节一致，未改动） | 上游仓库素材（上游未提供 LICENSE） |
 | `src/Ui/public/images/teyvat-landscape.webp` | 概览页 / 指南页的璃月风格山水横幅 | **gpt-6-astra-max 生成的原神风格插画**（个人自用前提下生成，非官方素材），转 WebP | 风格致敬《原神》；场景本身非米哈游素材 |
 | `src/Ui/public/images/starrail-icon.webp` | 《崩坏：星穹铁道》游戏图标（游戏库与顶栏切换器用） | 米哈游官方素材，转 WebP | © 米哈游 / HoYoverse |
 | `src/Ui/public/favicon.svg` | 星芒形单色 logo（纯几何路径，304 字节） | 本项目手写 SVG（矢量，不转位图） | 本项目（MIT） |
@@ -344,7 +348,7 @@ Kachina **只从本仓库的 `installer/kachina/` 源码快照构建**：CI 与�
 > 注 0：仓库里的位图素材统一为 **WebP**（`src/Ui/public/images/*.webp`、
 > `src/Ui/public/favicon.webp`、`src/Host/Assets/*.webp`）。只有两类例外：
 > Windows 图标文件必须保持 **ICO**（`src/Host/Assets/app.ico`、
-> `installer/kachina/src-tauri/icons/icon.ico`，exe / 托盘 / 快捷方式图标由系统 API 读取），
+> Kirara 的 `src-tauri/icons/icon.ico`，exe / 托盘 / 快捷方式图标由系统 API 读取），
 > 手写 logo 保持 **SVG**（矢量，缩放不失真）。转换脚本：`tools/to-webp.mjs`。
 > 构建脚本会递归清理 `dist` / 安装包暂存目录里的旧位图格式，避免增量构建残留
 > `.png` / `.jpg` / `.jpeg` / `.gif` / `.bmp` / `.tif` / `.tiff`；转换时如需一并删除
@@ -353,7 +357,7 @@ Kachina **只从本仓库的 `installer/kachina/` 源码快照构建**：CI 与�
 > 注 1：除 `favicon.svg`（本项目手写）与 gpt-6-astra-max 生成的横幅外，仓库内所有图片都与
 > 上游 kachina 快照或 BetterGI 仓库中的某个文件**逐字节相同**（核对方式：`md5sum`，
 > 路径见上表「来源」列）。BetterGI 以 **GPL-3.0** 发布，这些素材**不随本项目的
-> MIT 许可再授权**；升级上游 kachina 时按 `installer/kachina/UPSTREAM.md` 一起更新。
+> MIT 许可再授权**；升级上游 kachina 时按 Kirara 的 `UPSTREAM.md` 一起更新。
 > 注 2：凡涉及《原神》《崩坏：星穹铁道》角色、官方图标或美术风格的素材，若权利人提出
 > 异议，将从仓库中移除并替换；版权归属见下文「商标与作品归属」。
 
@@ -367,6 +371,6 @@ Kachina **只从本仓库的 `installer/kachina/` 源码快照构建**：CI 与�
 
 ## License
 
-MIT · MinHook：BSD-2-Clause · 安装包构建工具 Kachina（[kachina-installer](https://github.com/YuehaiTeam/kachina-installer)，源码快照见 `installer/kachina/`）按其上游许可使用 —— **注意：上游仓库未提供 LICENSE 文件**，详见 `installer/kachina/UPSTREAM.md`。
+MIT · MinHook：BSD-2-Clause · 安装包构建工具 Kachina（[kachina-installer](https://github.com/YuehaiTeam/kachina-installer)，源码快照在独立项目 [Kirara](https://github.com/bainian-gudu/Kirara)）按其上游许可使用 —— **注意：上游仓库未提供 LICENSE 文件**，详见 Kirara 的 `UPSTREAM.md`。
 代码与文档主要由 AI 生成并按上述 MIT 许可发布；**图片素材不随 MIT 许可授权** ——
 它们分别属于米哈游、BetterGI（GPL-3.0）与上游 kachina 快照（见「图片与素材来源」）。

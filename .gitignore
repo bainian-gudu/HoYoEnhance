@@ -18,7 +18,7 @@ cmake-build-*/
 config.json
 *.log
 
-# Compiled binaries in tree (CI produces under dist/ ; installer/tools/)
+# Compiled binaries in tree (CI produces under dist/ ; packaging/tools/)
 *.dll
 *.exe
 *.pdb
@@ -33,30 +33,19 @@ config.json
 Thumbs.db
 *~
 
-# Extra docs (do not track) — installer/ 下的说明文档例外
+# Extra docs (do not track) — 仓库内维护的说明文档例外
 docs/
 *.md
 !README.md
-!installer/README.md
-!installer/kachina/README.md
-!installer/kachina/UPSTREAM.md
-!installer/kachina/LOCAL_PATCHES.md
-!installer/kachina/vendor/rcedit-rs/LOCAL_PATCHES.md
+!packaging/README.md
+!tools/devcheck/README.md
 
 # ---------------------------------------------------------------------------
-# 安装器打包（installer/）
-#   kachina/         上游 kachina-installer 源码快照 —— 需要进版本库
-#   tools/           由 installer/build-kachina.ps1 构建出的 kachina-builder.exe
-#   其余为构建中间产物
+# 安装包打包（packaging/）
+#   打包脚本与配置需要进版本库（pack.ps1 / packaging.config.json / README.md）；
+#   安装器工具链（源码快照 → kirara-builder.exe）在独立项目 Kirara
 # ---------------------------------------------------------------------------
-installer/tools/
-installer/kachina/node_modules/
-installer/kachina/dist/
-installer/kachina/.cache/
-installer/kachina/src-tauri/target/
-installer/kachina/src-tauri/gen/
-installer/kachina/tests/fixtures/
-# keep: installer/kachina.config.json, installer/pack.ps1, installer/build-kachina.ps1
+packaging/tools/
 
 # Web UI
 src/Ui/node_modules/

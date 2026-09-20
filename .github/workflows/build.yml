@@ -20,11 +20,16 @@ on:
         options:
           - framework-dependent
           - self-contained
-      rebuild_kachina:
-        description: "强制从 installer/kachina 源码重建 kachina-builder（忽略缓存）"
+      rebuild_builder:
+        description: "强制从 Kirara 源码重建 kirara-builder（忽略缓存）"
         required: false
         default: false
         type: boolean
+      kirara_ref:
+        description: "Kirara（安装器工具链）仓库的 ref：分支 / tag / commit"
+        required: true
+        default: "main"
+        type: string
 # 只需要 checkout 与上传 artifact，不需要写权限（与 devcheck.yml 一致）
 permissions:
   contents: read
@@ -48,50 +53,54 @@ env:
   DOTNET_CLI_TELEMETRY_OPTOUT: "1"
   CARGO_TERM_COLOR: "always"
   # 压掉第三方 action 自己的告警，理由见
-  # installer/README.md「workflow 里那些看着多余的设置」
+  # tools/devcheck/README.md「日志里哪些 Warning / error 是正常的」
   NODE_NO_WARNINGS: "1"
 
 jobs:
   # ---------------------------------------------------------------------------
-  # 项目内 kachina-installer 源码 → kachina-builder.exe
-  # 二进制只从本仓库源码构建，不从上游 Release 下载
+  # 安装器工具链在独立项目 Kirara：检出固定 ref 并从其源码构建 kirara-builder.exe
+  # 二进制只从该 ref 的源码构建，不从任何 Release 下载
   # ---------------------------------------------------------------------------
-  build-kachina:
-    name: Kachina builder (from installer/kachina)
+  build-builder:
+    name: Installer builder (from Kirara)
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
-      - name: Checkout
+      - name: Checkout Kirara
         uses: actions/checkout@v5
+        with:
+          repository: bainian-gudu/Kirara
+          ref: ${{ inputs.kirara_ref }}
+          path: kirara
 
       # 源码没变就直接复用上次的产物（Rust LTO + build-std + 静态 msquic 冷构建很慢）。
       # 这一步**始终执行**：被 if 跳过时 actions/cache 连保存都不会做，强制重建那一轮
       # 跑完就存不下缓存，下一轮还得再冷构建一次（真踩过）。
-      - name: Cache kachina-builder.exe
-        id: kachina-cache
-        # 版本下限见 installer/README.md「workflow 里那些看着多余的设置」
+      - name: Cache kirara-builder.exe
+        id: builder-cache
+        # 版本下限见 tools/devcheck/README.md「日志里哪些 Warning / error 是正常的」
         uses: actions/cache@v5
         with:
-          path: installer/tools/kachina-builder.exe
-          key: kachina-builder-${{ runner.os }}-${{ hashFiles('installer/kachina/**') }}
+          path: kirara/tools/kirara-builder.exe
+          key: kirara-builder-${{ runner.os }}-${{ hashFiles('kirara/src/**', 'kirara/src-tauri/**', 'kirara/vendor/**', 'kirara/package.json', 'kirara/pnpm-lock.yaml') }}
 
-      # rebuild_kachina=true 只决定「命中缓存也要重建」，不再决定要不要读写缓存：
+      # rebuild_builder=true 只决定「命中缓存也要重建」，不再决定要不要读写缓存：
       # 没命中就构建，跑完由上面的缓存步骤把新产物存进去。
       - name: Decide whether to rebuild
-        id: kachina
+        id: builder
         shell: pwsh
         run: |
-          $hit = '${{ steps.kachina-cache.outputs.cache-hit }}' -eq 'true'
-          $force = '${{ inputs.rebuild_kachina }}' -eq 'true'
+          $hit = '${{ steps.builder-cache.outputs.cache-hit }}' -eq 'true'
+          $force = '${{ inputs.rebuild_builder }}' -eq 'true'
           $rebuild = -not ($hit -and -not $force)
           "rebuild=$($rebuild.ToString().ToLowerInvariant())" |
             Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "cache-hit=$hit force=$force rebuild=$rebuild"
 
       # 长路径 + 下面的 CMAKE_GENERATOR: Ninja 是同一件事的两道防线（FTK1011），
-      # 详见 installer/README.md「workflow 里那些看着多余的设置」
+      # 详见 tools/devcheck/README.md「日志里哪些 Warning / error 是正常的」
       - name: Enable Windows long paths
-        if: steps.kachina.outputs.rebuild == 'true'
+        if: steps.builder.outputs.rebuild == 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -101,7 +110,7 @@ jobs:
           "LongPathsEnabled = " + (Get-ItemProperty -Path $key).LongPathsEnabled
 
       - name: Install Rust nightly + rust-src
-        if: steps.kachina.outputs.rebuild == 'true'
+        if: steps.builder.outputs.rebuild == 'true'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -110,39 +119,39 @@ jobs:
           rustc --version; cargo --version
 
       - name: Cache cargo / target
-        if: steps.kachina.outputs.rebuild == 'true'
+        if: steps.builder.outputs.rebuild == 'true'
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: "installer/kachina/src-tauri"
+          workspaces: "kirara/src-tauri"
           cache-targets: true
-          key: kachina-src
+          key: kirara-src
 
       - name: Setup pnpm
-        if: steps.kachina.outputs.rebuild == 'true'
-        # 版本下限见 installer/README.md「workflow 里那些看着多余的设置」
+        if: steps.builder.outputs.rebuild == 'true'
+        # 版本下限见 tools/devcheck/README.md「日志里哪些 Warning / error 是正常的」
         uses: pnpm/action-setup@v6
         with:
-          # 仓库根目录没有 package.json；版本号（pnpm@10.17.0）从上游快照的
+          # 检出目录的根没有 package.json；版本号（pnpm@10.17.0）从上游快照的
           # packageManager 字段读取
-          package_json_file: installer/kachina/package.json
+          package_json_file: kirara/package.json
 
       - name: Setup Node.js
-        if: steps.kachina.outputs.rebuild == 'true'
+        if: steps.builder.outputs.rebuild == 'true'
         uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
-          cache-dependency-path: installer/kachina/pnpm-lock.yaml
+          cache-dependency-path: kirara/pnpm-lock.yaml
 
       # Ninja 生成器不会像 MSBuild 那样自己去 VS 安装目录找 cl.exe，
       # 必须先把 MSVC 开发环境注入 PATH / INCLUDE / LIB。
       - name: Add MSVC Developer environment
-        if: steps.kachina.outputs.rebuild == 'true'
+        if: steps.builder.outputs.rebuild == 'true'
         shell: pwsh
-        run: tools/ci/Import-DevCmd.ps1 -Arch x64
+        run: kirara/tools/ci/Import-DevCmd.ps1 -Arch x64
 
-      - name: Build kachina-builder from source
-        if: steps.kachina.outputs.rebuild == 'true'
+      - name: Build kirara-builder from source
+        if: steps.builder.outputs.rebuild == 'true'
         env:
           # cmake-rs 会读取 CMAKE_GENERATOR；Ninja 不写 .tlog，绕开 FTK1011（见 README）
           CMAKE_GENERATOR: Ninja
@@ -152,19 +161,19 @@ jobs:
           "CMAKE_GENERATOR = $env:CMAKE_GENERATOR"
           & cmake --version | Select-Object -First 1
           & ninja --version
-          & .\installer\build-kachina.ps1 -Toolchain $env:RUST_TOOLCHAIN
-          if (-not (Test-Path "installer\tools\kachina-builder.exe")) {
-            throw "kachina-builder.exe 未生成"
+          & .\kirara\build.ps1 -Toolchain $env:RUST_TOOLCHAIN
+          if (-not (Test-Path "kirara\tools\kirara-builder.exe")) {
+            throw "kirara-builder.exe 未生成"
           }
-          Get-Item installer\tools\kachina-builder.exe |
+          Get-Item kirara\tools\kirara-builder.exe |
             Select-Object FullName, @{n = "MB"; e = { [math]::Round($_.Length / 1MB, 2) }} |
             Format-List
 
-      - name: Upload kachina-builder
+      - name: Upload kirara-builder
         uses: actions/upload-artifact@v6
         with:
-          name: kachina-builder
-          path: installer/tools/kachina-builder.exe
+          name: kirara-builder
+          path: kirara/tools/kirara-builder.exe
           if-no-files-found: error
           retention-days: 7
 
@@ -254,22 +263,22 @@ jobs:
           retention-days: 7
 
   # ---------------------------------------------------------------------------
-  # 打包：调用项目内的 kachina-builder（installer/pack.ps1）
+  # 打包：用 Kirara 构建出的 kirara-builder 跑 packaging/pack.ps1
   # ---------------------------------------------------------------------------
   pack:
-    name: Pack Kachina installer
+    name: Pack installer
     runs-on: windows-latest
-    needs: [build-kachina, build-app]
+    needs: [build-builder, build-app]
     timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Download kachina-builder
+      - name: Download kirara-builder
         uses: actions/download-artifact@v7
         with:
-          name: kachina-builder
-          path: installer/tools
+          name: kirara-builder
+          path: packaging/tools
 
       - name: Download app dist
         uses: actions/download-artifact@v7
@@ -292,9 +301,11 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          if (-not (Test-Path "installer\tools\kachina-builder.exe")) { throw "kachina-builder.exe missing" }
+          if (-not (Test-Path "packaging\tools\kirara-builder.exe")) { throw "kirara-builder.exe missing" }
           if (-not (Test-Path "dist\HoYoEnhance.exe")) { throw "dist payload missing" }
-          & .\installer\pack.ps1 -SkipKachinaBuild -Version "${{ steps.ver.outputs.version }}"
+          & .\packaging\pack.ps1 `
+            -BuilderPath "packaging\tools\kirara-builder.exe" `
+            -Version "${{ steps.ver.outputs.version }}"
           Get-ChildItem artifacts | Format-Table Name, Length
 
       - name: Upload artifacts

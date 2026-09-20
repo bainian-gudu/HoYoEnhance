@@ -1,63 +1,57 @@
-# installer/ — 安装器与发布包
+# packaging/ — 安装包配置与打包脚本
 
 本项目的安装 / 卸载 / 更新**只有 Kachina 一种实现**。宿主程序（`src/Host`）本身不动
 文件与注册表，收到 `--install` / `--uninstall` 这类旧参数时只提示用户改用 Kachina。
 
-面向使用者只需要下载根目录 `artifacts\` 中的安装包；本目录供开发者构建、配置和排查安装器。
-所有与打包安装器相关的代码都集中在这里：
+面向使用者只需要下载根目录 `artifacts\` 中的安装包；本目录供开发者配置和排查安装包。
+**安装器工具链不在这里**：上游 [kachina-installer](https://github.com/YuehaiTeam/kachina-installer)
+的源码快照 + 本地补丁 + `kirara-builder` 都在独立项目
+[Kirara](https://github.com/bainian-gudu/Kirara)（默认取同级目录 `..\Kirara`）。
 
-```
-installer/
+```text
+packaging/
 ├── README.md               本文件
-├── kachina.config.json     Kachina 配置（安装目录、ARP 名称、运行库、协议正文、卸载时清理的数据目录与注册表）
-├── build-kachina.ps1       从 kachina/ 源码构建 kachina-builder.exe
-├── pack.ps1                打包总入口：dist\ → Install.exe / 便携 zip / 便携 7z
-├── tools/                  构建产物 kachina-builder.exe（.gitignore，不进版本库）
-└── kachina/                上游 kachina-installer 源码快照 + 本地修改（tag 0.5.1，
-    │                       见 kachina/UPSTREAM.md 与 kachina/LOCAL_PATCHES.md）
-    └── vendor/rcedit-rs/   vendored 的 cargo 依赖（上游 rcedit-rs@1bfa3ee + 1 行 C++
-                            修复：MSVC 14.51 移除了 std::locale::empty()，
-                            见该目录的 LOCAL_PATCHES.md）
+├── packaging.config.json   Kachina 配置（安装目录、ARP 名称、运行库、协议正文、卸载时清理的数据目录与注册表）
+└── pack.ps1                打包总入口：dist\ → Install.exe / 便携 zip / 便携 7z
 ```
+
+排查时两边对照的位置：
+
+| 本仓库 | Kirara |
+| --- | --- |
+| `pack.ps1` 调用的 `kirara-builder.exe` | 它的 `build.ps1` 从 `src/`、`src-tauri/` 构建出的 `tools/kirara-builder.exe` |
+| 卸载器实际删什么、安全阀怎么判 | `src-tauri/src/installer/uninstall.rs`，逐处说明见 `LOCAL_PATCHES.md` |
+| 上游来源、版本与升级步骤 | `UPSTREAM.md`、`LOCAL_PATCHES.md` |
 
 ## 快速开始
 
 在仓库根目录执行：
 
 ```powershell
-# 仓库根目录：编译 UI + Stub + Host，再打包安装器
+# 仓库根目录：编译 UI + Stub + Host，再打包安装包（首次会调 Kirara 的 build.ps1）
 .\build.ps1
 
 # 已经编译过、只想重新打包
-.\installer\pack.ps1
+.\packaging\pack.ps1
 
 # 只编译，不打包
 .\build.ps1 -SkipSetup
 ```
 
-首次构建需要 Rust nightly、`rust-src`、Node.js 20+、pnpm 10、PowerShell 7 和 Windows
-MSVC/VS Build Tools。Windows 目标的 Tauri/C++ 编译阶段需要 Windows MSVC 工具链。
-安装器前端依赖安装命令如下：
-
-```bash
-cd installer/kachina
-pnpm install --frozen-lockfile
-```
-
-首次执行会从源码构建 `kachina-builder.exe`（需要 Rust nightly + Node/pnpm + MSVC，
-详见 `kachina/UPSTREAM.md`）。之后 `installer\tools\kachina-builder.exe` 存在**且不比
-`installer\kachina\` 里的源码旧**才跳过——改了 kachina 源码（例如本仓库对上游的
-本地修改）会自动触发重建，不会拿着旧 builder 打包：
+`pack.ps1` 默认到同级目录 `..\Kirara` 找工具链；Kirara 不在那里、或手上已经有现成的
+builder 时用参数指定：
 
 ```powershell
-.\build.ps1 -SkipKachinaBuild    # 要求 tools\kachina-builder.exe 已存在，且完全不做检查
-.\build.ps1 -ForceKachinaBuild   # 强制重建
+.\build.ps1 -KiraraRepo D:\src\Kirara          # 指定 Kirara 项目路径
+.\build.ps1 -BuilderPath D:\kirara-builder.exe # 直接用现成 builder
+.\build.ps1 -SkipBuilderBuild                  # 不自动构建（要求默认位置已有 builder）
 ```
 
-> 判据是文件修改时间（跳过 `node_modules` / `dist` / `target` / `gen` / `.cache`），
-> 所以 `git checkout` 触碰过的文件可能触发一次多余的重建；确定不需要时用
-> `-SkipKachinaBuild`。CI 里 `build-kachina` 命中缓存时根本不会调用该脚本，
-> 不受影响。
+调用 Kirara 的 `build.ps1` 时由它自己判断：builder 缺失、或源码比产物新才重建。判据是
+文件修改时间（跳过 `node_modules` / `dist` / `target` / `gen` / `.cache`），所以
+`git checkout` 触碰过的文件可能触发一次多余的重建；确定不需要时用 `-SkipBuilderBuild`。
+构建 Kirara 需要 Rust nightly（含 `rust-src`）、Node.js 20+、pnpm 10、PowerShell 7 与
+Windows MSVC / VS Build Tools，完整说明见该仓库的 `README.md`。
 
 ## 产物
 
@@ -75,20 +69,20 @@ pnpm install --frozen-lockfile
 
 ```powershell
 # 1) 更新器（也会被塞进便携包，用于在线升级）
-kachina-builder.exe pack -c installer\kachina.config.json -o <app>\<更新程序>.exe
+kirara-builder.exe pack -c packaging\packaging.config.json -o <app>\<更新程序>.exe
 
 # 2) 生成 metadata + 分块 hashed 目录
-kachina-builder.exe gen -j 6 -i HoYoEnhance -m metadata.json -o hashed `
+kirara-builder.exe gen -j 6 -i HoYoEnhance -m metadata.json -o hashed `
     -r bainian-gudu/HoYoEnhance -t <ver> -u .\<app>\<更新程序>.exe
 
 # 3) 离线安装器
-kachina-builder.exe pack -c installer\kachina.config.json -m metadata.json -d hashed `
+kirara-builder.exe pack -c packaging\packaging.config.json -m metadata.json -d hashed `
     -o <HoYoEnhance 安装包>.exe
 ```
 
-中间目录用 `out\kachina-pack\`（已被 `.gitignore` 排除）。
+中间目录用 `out\pack\`（已被 `.gitignore` 排除）。
 > 不要用 `build\`：Windows 路径大小写不敏感，会和历史上的 `Build\` 目录混淆。
-> 上述命令里的产品标识与输出文件名以 `installer\pack.ps1`、`kachina.config.json`
+> 上述命令里的产品标识与输出文件名以 `packaging\pack.ps1`、`packaging.config.json`
 > 的实际兼容配置为准。
 
 ## Kachina 负责什么 / 不负责什么
@@ -108,12 +102,12 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 | 事项 | 归属 | 说明 |
 | --- | --- | --- |
 | 快捷方式的**显示名** | `src/Host/ShortcutHelper.cs` | Kachina 按 `shortcutName` 建 `HoYoEnhance.lnk`（桌面 + 开始菜单），宿主每次启动统一主项为 `HoYoEnhance.lnk`、卸载项为 `Uninstall HoYoEnhance.lnk`，并清掉内部名 / 历史中文名重复项；上游卸载器认不出的历史名靠 `extraUninstallLnkNames` 补删（见下） |
-| 开机自启 | `src/Host/Autostart.cs` | 按配置项「开机自启动」+「启动时自动以管理员权限运行」同步，两种登记方式二选一：普通权限写 `HKCU\...\Run`，管理员权限登记任务计划程序里的兼容自启任务（`RunLevel=HighestAvailable`，登录不弹 UAC）。卸载时分别由 `kachina.config.json` 的 `extraUninstallRegistry` 与 `extraUninstallScheduledTasks` 交给卸载器回收（见下），不需要用户先手动关闭 |
+| 开机自启 | `src/Host/Autostart.cs` | 按配置项「开机自启动」+「启动时自动以管理员权限运行」同步，两种登记方式二选一：普通权限写 `HKCU\...\Run`，管理员权限登记任务计划程序里的兼容自启任务（`RunLevel=HighestAvailable`，登录不弹 UAC）。卸载时分别由 `packaging.config.json` 的 `extraUninstallRegistry` 与 `extraUninstallScheduledTasks` 交给卸载器回收（见下），不需要用户先手动关闭 |
 
 ## 本项目给 Kachina 加 / 改的配置项
 
-下面几项上游都没有（`userDataPath` 上游有字段但行为有坑），改动都在 `kachina/` 里，
-逐处说明见 [`kachina/LOCAL_PATCHES.md`](kachina/LOCAL_PATCHES.md)。
+下面几项上游都没有（`userDataPath` 上游有字段但行为有坑），改动落在 Kirara 持有的源码
+快照里，逐处说明见 Kirara 的 `LOCAL_PATCHES.md`。
 
 ### `legacyExeNames` / `legacyProgramFilesPaths` — 品牌改名后的升级识别
 
@@ -175,8 +169,8 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 | 通配符一律拒绝 | 卸载器通常以管理员身份运行，`*` 会变成「删掉整台机器的任务」 |
 | 失败只记日志 | 任务不存在、权限不足、schtasks 调用失败都不会让卸载中断 |
 
-安全阀实现在 `src-tauri/src/installer/uninstall.rs` 的 `is_safe_task_name`，
-断言见 `tools/devcheck` 的 logic 层（第 17、18 组用例）。
+安全阀实现在 Kirara 的 `src-tauri/src/installer/uninstall.rs`（`is_safe_task_name`），
+断言见 Kirara 的 `tools/devcheck` logic 层（第 17、18 组用例）。
 
 ### `extraUninstallLnkNames` — 卸载时清理宿主自建/改名的快捷方式
 
@@ -192,7 +186,7 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 只写**文件名**，目录由卸载器用 shell API 解析后拼出来，四侧都试：
 公共桌面 / 用户桌面、公共开始菜单 / 用户开始菜单下的 `{appName}\` 文件夹。
 这样即使用户桌面被 OneDrive 重定向、或宿主当初写在了另一侧，也能删干净。
-完整兼容别名以 `installer\kachina.config.json` 为准。
+完整兼容别名以 `packaging\packaging.config.json` 为准。
 
 这些路径走的是**尽力删除**：删不掉（无权限、被占用）只写日志，
 不会把卸载判为失败——上游 `extraUninstallPath` 的语义是删不掉就报错中断，
@@ -215,8 +209,8 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 漫游配置挡住时就会落到后两个）。所以卸载必须三处都试，否则换了落盘位置的
 用户数据就清不掉。不存在的目录自动跳过。
 
-上游卸载器在这里有两个坑，本地补丁都填了（详见
-[`kachina/LOCAL_PATCHES.md`](kachina/LOCAL_PATCHES.md) 第 6 节）：
+上游卸载器在这里有两个坑，Kirara 的本地补丁都填了（详见其 `LOCAL_PATCHES.md`
+第 6 节）：
 
 | 坑 | 后果 | 补丁 |
 | --- | --- | --- |
@@ -264,7 +258,7 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 - 安装界面的「我已阅读并同意 **用户协议**」里，链接可点击，弹窗显示全文；
   弹窗底部「我已阅读并同意」会顺手勾上同意框（「关闭」只关弹窗，不改勾选状态）。
   正文可滚动、按钮固定在下方不遮正文 —— 安装窗口只有 520×250，弹窗骨架因此改成
-  纵向 flex，细节见 `kachina/LOCAL_PATCHES.md` 第 5 节。
+  纵向 flex，细节见 Kirara 的 `LOCAL_PATCHES.md` 第 5 节。
 - **内联了协议正文就必须主动勾选**才能点「安装」（`acceptEula` 初始为 `false`）。
   没有协议内容时保持上游默认（视为已同意）；`silent` / `non_interactive` 安装、
   更新、卸载都不受影响。
@@ -278,8 +272,8 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 ## 卸载器的删除安全阀（防误删 / 防被利用提权）
 
 卸载器通常以管理员身份运行（`uacStrategy: "prefer-admin"`），而「删什么」来自
-打包配置。为了不让配置笔误或被篡改的安装目录被管理员权限放大，本地补丁加了
-几道安全阀（详见 `kachina/LOCAL_PATCHES.md` 第 3 节）：
+打包配置。为了不让配置笔误或被篡改的安装目录被管理员权限放大，Kirara 的本地补丁
+加了几道安全阀（详见其 `LOCAL_PATCHES.md` 第 3 节）：
 
 | 通道 | 规则 |
 | --- | --- |
@@ -300,67 +294,53 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 ## CI
 
 两个工作流：**Devcheck**（`devcheck.yml`，push/PR 自动执行，跑 `tools/devcheck` 的
-全部检查层 + 自检，几分钟）与 **Build**（`build.yml`，仅手动触发，出安装包）。
-
-Devcheck 的 windows job 里有一层 `native`：用 runner 上的 MSVC 真编一遍
-`kachina/vendor/rcedit-rs/rcedit-sys` 的 C++。这样「工具链升级把 vendored C++ 编坏」
-这类问题（MSVC 14.51 移除 `std::locale::empty()` 就是这么炸的）在**自动**工作流里
-就会暴露，不用等手动触发 Build 跑 6 分钟。
+全部检查层 + 自检 + Web UI 构建，几分钟）与 **Build**（`build.yml`，仅手动触发，出安装包）。
 
 `build.yml` 三个 job：
 
-1. `build-kachina` —— 用 `installer/kachina` 源码构建 `kachina-builder.exe`；
-   源码未变时命中 `actions/cache`（key = `hashFiles('installer/kachina/**')`）直接复用，
-   也可用 `rebuild_kachina` 输入强制重建。
-2. `build-app` —— `build.ps1 -SkipSetup` 产出 `dist\`。
-3. `pack` —— 下载前两者，执行 `installer\pack.ps1 -SkipKachinaBuild`。
+1. `build-builder` —— 按输入 `kirara_ref`（默认 `main`，可填分支 / tag / commit）检出
+   独立项目 Kirara，跑它的 `build.ps1` 从源码构建 `kirara-builder.exe`；源码未变时命中
+   `actions/cache`（key = Kirara 侧源码哈希）直接复用，输入 `rebuild_builder=true`
+   强制重建。
+2. `build-app` —— `build.ps1 -SkipSetup` 产出 `dist\`；随后让刚构建出的宿主导出
+   登录计划任务 XML，交给 runner 上的 `schtasks` 真建一次、真删一次。
+3. `pack` —— 下载前两者的产物，执行
+   `packaging\pack.ps1 -BuilderPath packaging\tools\kirara-builder.exe`。
 
-**不再从上游 Release 下载 `kachina-builder.exe`**，也不会从上游仓库拉源码：
-kachina 只来自本仓库的 `installer/kachina/` 快照。这条约束由
-`pwsh tools/devcheck/devcheck.ps1 -Layer vendor` 自动断言（不是 submodule、
-快照完整、工作流与打包脚本里没有任何 `git clone` / `releases/download` /
-`Invoke-WebRequest` 之类的外部拉取动作、git 依赖在 `Cargo.lock` 里锁到 commit、
-npm 依赖全部来自 registry），并且每次 push 都会在 Devcheck 工作流里跑一遍。
+**不从上游 Release 下载 `kachina-builder.exe`，也不从上游仓库拉源码**：安装器工具链
+只来自 Kirara 的固定 ref，由它的源码现场构建。这条约束由 devcheck 的 `vendor` 层自动
+断言（本仓库不内嵌 kachina 源码、不是 submodule、工作流与打包脚本里没有任何
+`git clone` / `releases/download` / `Invoke-WebRequest` 之类的外部拉取动作、CI 确实从
+Kirara 的固定 ref 构建），每次 push 都会在 Devcheck 工作流里跑一遍。遥测
+（Sentry / cocogoat 统计）不许回归的断言在 Kirara 的 `tools/devcheck` 里。
 
-CI 仍会联网获取 crates.io / npm registry / rustup 工具链 / marketplace action ——
-这是任何构建都免不了的；被禁止的是「kachina 本体来自本仓库之外」。
+CI 仍会联网获取 NuGet / crates.io / npm registry / rustup 工具链 / marketplace action ——
+这是任何构建都免不了的；被禁止的是「安装器本体来自 Kirara 之外的来源」。
 
 ### workflow 里那些看着多余的设置
 
 工作流与脚本的注释只留一句指针，完整理由记在这里（约定：**思路、踩坑过程、
-参考的项目/issue 一律写文档，不写进代码注释**）。
+参考的项目/issue 一律写文档，不写进代码注释**）。安装器侧（Rust nightly、Ninja、
+MSVC 环境注入、vendored `rcedit-rs`）的设置随工具链搬到了 Kirara，理由记在该仓库的
+`README.md` 里。
 
 | 设置 | 为什么 |
 | --- | --- |
-| `RUST_TOOLCHAIN: nightly` + `-Z build-std` | 上游 kachina 的构建方式，stable 工具链编不过 |
-| `CMAKE_GENERATOR: Ninja`（`build-kachina` job） | `seera-msquic` 的静态构建会在 `target\<三元组>\release\build\seera-msquic\<hash>\out\build\CMakeFiles\CMakeScratch\TryCompile-*\...` 这种极深路径下写 `.tlog`，超过 Windows 260 字符上限时 MSBuild 的 FileTracker 报 `error FTK1011: could not create the new file tracking log file`。Ninja 不写 `.tlog`，从根上绕开；同 job 里的 `Enable Windows long paths`（`LongPathsEnabled=1`）是第二道防线。**副作用**：Ninja 不会像 MSBuild 那样自己去 VS 安装目录找 `cl.exe`，所以必须先跑 `tools/ci/Import-DevCmd.ps1` 把 `PATH` / `INCLUDE` / `LIB` 注入进去 |
-| `tools/ci/Import-DevCmd.ps1` | 仓库自带的 MSVC 环境注入，不依赖任何 Node 运行时，因此不会在 runner 上产生 action 相关的弃用告警。按 `ProgramFiles` / `ProgramFiles(x86)` 枚举 `vcvarsall.bat`（环境变量推导，不写死盘符或版本）→ 用 `Start-Process` 跑一次子 cmd 拿全量环境变量 → 同名变量后者覆盖前者，结果写进 `$GITHUB_ENV` 供后续 step 使用 |
 | `NODE_NO_WARNINGS: "1"` | `actions/setup-node` 自己（含它的 post-job 缓存步骤）会打 `[DEP0040] punycode` / `[DEP0169] url.parse()` 弃用告警，是 action 内部依赖的事，跟本仓库无关。`env` 对所有步骤生效，在这里统一静音 |
-| 工作流里 action 的版本下限 | `actions/cache` ≥ v5、`pnpm/action-setup` ≥ v5、`actions/download-artifact` ≥ v7：这三个版本起 `action.yml` 声明 `node24`，低于下限的版本会在 runner 上打 Node 20 弃用告警。升级时对照 `action.yml` 的 `runs.using` 复核 |
-| kachina 的 `rcedit = { path = "../vendor/rcedit-rs" }` | 原本是 git 依赖，但上游 C++ 用了新版 MSVC 已移除的非标准扩展，编不过。完整出处（含上游仓库、快照 commit、对应的 MSVC STL 变更）见 `kachina/vendor/rcedit-rs/LOCAL_PATCHES.md` |
-| 仓库根的 `.gitattributes`（`* text=auto eol=lf`） | windows-latest 的 git 默认 `core.autocrlf=true`，检出成 CRLF 后 `prettier --check` 在 Windows 上必挂。详见 `../tools/devcheck/README.md`「跨平台的坑」 |
-| `git config --global init.defaultBranch main`（放在 checkout 之前） | `actions/checkout` 会先 `git init`，ubuntu 镜像上默认分支名还是 `master`，每次打 8 行 hint。同上 |
-
-### 已经在 CI 上跑通
-
-2026-09-12，commit `3f7c770`，手动触发（勾了 `rebuild_kachina`），**三个 job 全绿，
-用时 17 分 40 秒**，产物：
-
-| 产物 | 大小 |
-| --- | --- |
-| HoYoEnhance 离线安装器 | 14.39 MB |
-| HoYoEnhance 便携版 | 7.60 MB |
-| `kachina-builder.exe`（从 `installer/kachina/` 源码构建） | 11.59 MB |
+| `schtasks` 真建一次登录计划任务 | 任务计划程序 XML 的格式对不对只有它自己说了算，devcheck 那几层管不到。`build-app` 里用真实宿主导出 XML 再 `schtasks /Create`，避免「管理员自启动」因为 XML 被拒而静默退回普通权限自启 |
+| 工作流里 action 的版本下限 | `actions/cache` ≥ v5、`pnpm/action-setup` ≥ v6、`actions/download-artifact` ≥ v7：这三个版本起 `action.yml` 声明 `node24`，低于下限的版本会在 runner 上打 Node 20 弃用告警。升级时对照 `action.yml` 的 `runs.using` 复核 |
+| 仓库根的 `.gitattributes`（`* text=auto eol=lf`） | windows-latest 的 git 默认 `core.autocrlf=true`，检出成 CRLF 后 `prettier --check` 在 Windows 上必挂。详见 [`../tools/devcheck/README.md`](../tools/devcheck/README.md)「跨平台的坑」 |
+| `git config --global init.defaultBranch main`（放在 checkout 之前） | `actions/checkout` 会先 `git init`，ubuntu 镜像上默认分支名还是 `master`，每次打 8 行 hint |
 
 ### Build 日志里这些告警是正常的（都不是本项目的代码）
 
 | 字样 | 来源 |
 | --- | --- |
 | `warning: the following packages contain code that will be rejected by a future version of Rust: russh v0.54.5` | 上游依赖 `russh` 的 future-incompat 提示，只在升级 `russh` 时消失，不影响产物 |
-| `Could Not Find ...\target\x86_64-win7-windows-msvc\release\kachina-builder...` | tauri CLI 自己探测产物路径的输出；实际产物落在不带三元组的 `target\release\`，`build-kachina.ps1` 的兜底分支会接住它 |
+| `Could Not Find ...\target\x86_64-win7-windows-msvc\release\kachina-builder...` | tauri CLI 自己探测产物路径的输出；实际产物落在不带三元组的 `target\release\`，Kirara 的 `build.ps1` 有兜底分支会接住它 |
 
 ## 升级上游 Kachina
 
-见 `kachina/UPSTREAM.md` 的「升级上游版本」小节。注意本目录有本地修改，
-覆盖上游后必须按 `kachina/LOCAL_PATCHES.md` 的「升级上游时的套用顺序」重新套用；
-升级后也要同步检查 `kachina.config.json`（若上游新增了配置项）与本目录的说明。
+源码快照、本地补丁与「升级上游时的套用顺序」都在 Kirara：见它的 `UPSTREAM.md` 与
+`LOCAL_PATCHES.md`。升级后还要回来核对 `packaging.config.json`（若上游新增了配置项）
+与本文件的说明。
