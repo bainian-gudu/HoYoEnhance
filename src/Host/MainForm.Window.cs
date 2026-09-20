@@ -10,6 +10,51 @@ internal sealed partial class MainForm : Form
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int RegisterWindowMessage(string lpString);
 
+    /// <summary>
+    /// 句柄建好后按当前 DPI 折算设计尺寸：Web 视图按 CSS 像素排版，
+    /// 若只按设备像素给 1180×760，150% 缩放下实际只有约 787×507 逻辑像素。
+    /// </summary>
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        // ShowInTaskbar 切换（进 / 出托盘）会重建句柄，只有第一次才套用设计尺寸，
+        // 之后重建不能把用户拖过的窗口尺寸顶掉。
+        var firstHandle = !_initialSizeApplied;
+        _initialSizeApplied = true;
+        ApplyDpiAwareSizes(resetSize: firstHandle);
+    }
+
+    /// <summary>换到不同缩放比的显示器时重新折算最小尺寸，否则又会被拖到过窄。</summary>
+    protected override void OnDpiChanged(DpiChangedEventArgs e)
+    {
+        base.OnDpiChanged(e);
+        ApplyDpiAwareSizes(resetSize: false);
+    }
+
+    private void ApplyDpiAwareSizes(bool resetSize)
+    {
+        try
+        {
+            var minimum = LogicalToDeviceUnits(MinimumLogicalSize);
+            // 小屏 + 高缩放时逻辑最小尺寸可能比屏幕还大：这时退到工作区大小，
+            // 宁可让界面走 CSS 的窄窗降级，也不要出现拖不到、装不下的窗口。
+            var work = (Screen.FromControl(this) ?? Screen.PrimaryScreen)?.WorkingArea ?? Rectangle.Empty;
+            if (work.Width > 0) minimum.Width = Math.Min(minimum.Width, work.Width);
+            if (work.Height > 0) minimum.Height = Math.Min(minimum.Height, work.Height);
+            MinimumSize = minimum;
+            if (!resetSize) return;
+
+            var target = LogicalToDeviceUnits(DefaultLogicalSize);
+            Size = new Size(Math.Max(target.Width, minimum.Width), Math.Max(target.Height, minimum.Height));
+            if (_hasRestoreLocation) CaptureRestoreLocation();
+            AppLog.Info($"window size (dpi {DeviceDpi}): min={MinimumSize}, size={Size}");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn("dpi size apply failed: " + ex.Message);
+        }
+    }
+
     /// <summary>Explorer 重启或登录后就绪时，重新注册托盘图标；标题栏最小化 → 托盘。</summary>
     protected override void WndProc(ref Message m)
     {
@@ -115,15 +160,7 @@ internal sealed partial class MainForm : Form
             ShowInTaskbar = false;
             try
             {
-                if (!_hasRestoreLocation)
-                {
-                    // 记下一个合理的恢复位置（屏幕中央），不要用 -32000
-                    var screen = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1280, 800);
-                    _restoreLocation = new Point(
-                        screen.Left + Math.Max(0, (screen.Width - Width) / 2),
-                        screen.Top + Math.Max(0, (screen.Height - Height) / 2));
-                    _hasRestoreLocation = true;
-                }
+                if (!_hasRestoreLocation) CaptureRestoreLocation();
             }
             catch { /* ignore */ }
 
@@ -366,11 +403,22 @@ internal sealed partial class MainForm : Form
             Height >= MinimumSize.Height / 2;
         if (on) return;
 
-        Width = Math.Min(1180, wa.Width - 40);
-        Height = Math.Min(760, wa.Height - 40);
+        var target = LogicalToDeviceUnits(DefaultLogicalSize);
+        Width = Math.Min(target.Width, wa.Width - 40);
+        Height = Math.Min(target.Height, wa.Height - 40);
         Left = wa.Left + Math.Max(0, (wa.Width - Width) / 2);
         Top = wa.Top + Math.Max(0, (wa.Height - Height) / 2);
         AppLog.Warn($"EnsureOnScreen reset bounds → {Bounds}");
+    }
+
+    /// <summary>记录「屏幕中央」作为托盘恢复位置（按当前窗口尺寸计算）。</summary>
+    private void CaptureRestoreLocation()
+    {
+        var screen = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1280, 800);
+        _restoreLocation = new Point(
+            screen.Left + Math.Max(0, (screen.Width - Width) / 2),
+            screen.Top + Math.Max(0, (screen.Height - Height) / 2));
+        _hasRestoreLocation = true;
     }
 
     private void NativeActivate()

@@ -39,8 +39,18 @@ internal sealed partial class MainForm : Form
     /// <summary>启动托盘时暂存正常位置，恢复时用。</summary>
     private Point _restoreLocation;
     private bool _hasRestoreLocation;
+    /// <summary>设计尺寸只在首个窗口句柄建好后套用一次，句柄重建（托盘切换）不得重置用户尺寸。</summary>
+    private bool _initialSizeApplied;
     private CancellationTokenSource? _wakeCts;
     private System.Windows.Forms.Timer? _trayRecoveryTimer;
+
+    /// <summary>
+    /// 设计尺寸与最小尺寸（逻辑像素，和 Web UI 的 CSS 断点同一套单位）。
+    /// 真正下发给窗口前会按当前 DPI 折算成设备像素：只按设备像素给尺寸的话，
+    /// 150% / 200% 缩放下的逻辑宽度会缩水，顶栏会换行、溢出。
+    /// </summary>
+    private static readonly Size DefaultLogicalSize = new(1180, 760);
+    private static readonly Size MinimumLogicalSize = new(960, 640);
 
     public MainForm(AppConfig config, UnlockService service, bool? startMinimizedOverride = null)
     {
@@ -50,9 +60,8 @@ internal sealed partial class MainForm : Form
         var startMinimized = startMinimizedOverride ?? _config.StartMinimized;
 
         Text = AppPaths.ProductTitle;
-        Width = 1180;
-        Height = 760;
-        MinimumSize = new Size(960, 640);
+        Size = DefaultLogicalSize;
+        MinimumSize = MinimumLogicalSize;
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.Sizable;
         MaximizeBox = true;
