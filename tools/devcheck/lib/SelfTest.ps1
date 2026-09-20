@@ -74,6 +74,17 @@ jobs:
         -Run { Test-KiraraBoundary } `
         -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $packScript) -Path $packScript }
 
+    # --- 3d) vendor：builder 路径不再固化绝对路径就必须报错 ---
+    Add-Case 'vendor 层能抓到 builder 路径没固化成绝对路径' `
+        -Mutate {
+            $text = [System.IO.File]::ReadAllText($packScript)
+            $broken = $text.Replace('$Builder = Get-AbsolutePath $Builder', '$Builder = $Builder')
+            if ($broken -eq $text) { throw '注入失败：pack.ps1 里没有 $Builder 的绝对路径固化' }
+            [System.IO.File]::WriteAllText($packScript, $broken)
+        } `
+        -Run { Test-KiraraBoundary } `
+        -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $packScript) -Path $packScript }
+
     # --- 4) ps1：临时放一个语法错误的 .ps1 进仓库 ---
     Add-Case 'ps1 层能抓到 PowerShell 语法错误' `
         -Mutate {

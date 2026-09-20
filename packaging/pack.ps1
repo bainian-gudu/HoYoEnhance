@@ -74,6 +74,17 @@ function Run([string]$exe, [string[]]$arguments, [string]$what) {
     if ($LASTEXITCODE -ne 0) { throw "$what 失败（exit $LASTEXITCODE）" }
 }
 
+# 打包中途会 Push-Location 到 out\pack，相对路径在那之后就失效了（CI 传进来的正是
+# 相对路径）：一开始就把可能相对的入参固化成绝对路径。
+function Get-AbsolutePath([string]$path) {
+    if (-not $path) { return $path }
+    if ([System.IO.Path]::IsPathRooted($path)) { return $path }
+    return [System.IO.Path]::GetFullPath((Join-Path $PWD $path))
+}
+$DistDir = Get-AbsolutePath $DistDir
+$OutDir  = Get-AbsolutePath $OutDir
+$Builder = Get-AbsolutePath $Builder
+
 $legacyImageExtensions = @(".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff")
 function Remove-LegacyImageFiles([string]$path) {
     if (-not (Test-Path -LiteralPath $path)) { return }

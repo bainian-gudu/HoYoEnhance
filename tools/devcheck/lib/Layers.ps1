@@ -86,6 +86,11 @@ function Test-KiraraBoundary {
     if ($pack -notmatch '(?m)^\s*if\s*\(\s*\$BuilderPath\s*\)\s*\{\s*\$SkipBuilderBuild\s*=\s*\$true\s*\}') {
         throw 'packaging/pack.ps1 给了 -BuilderPath 仍会去 Kirara 目录找 build.ps1 —— 与 .PARAMETER BuilderPath 的约定不符'
     }
+    # 打包中途会 Push-Location 到 out\pack：builder 路径必须提前固化成绝对路径，
+    # 否则 CI 传进来的相对路径在 gen 步骤会被 PowerShell 当成模块名（真踩过）。
+    if ($pack -notmatch '(?m)^\s*\$Builder\s*=\s*Get-AbsolutePath\s+\$Builder\s*$') {
+        throw 'packaging/pack.ps1 没有把 $Builder 固化成绝对路径 —— Push-Location 之后相对路径会失效'
+    }
     $notes.Add('打包脚本只从 Kirara 取 builder')
 
     return ($notes -join '；')
