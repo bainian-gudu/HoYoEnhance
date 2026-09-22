@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    用 Kirara 项目构建出的 kirara-builder 把 dist\ 打成安装器 / 更新器 / 便携包。
+    用 Kirara 项目构建出的 kirara-builder 把 dist\ 打成离线安装器（内含更新器）。
 
 .DESCRIPTION
     这是本仓库唯一的打包入口。安装器工具链（kachina 源码快照 + kirara-builder）
@@ -12,8 +12,6 @@
 
     产物统一落到 artifacts\：
       <HoYoEnhance 安装包>.exe        离线安装器（含 uninst / update）
-      <HoYoEnhance 便携包>.zip        便携包（内含 update.exe）
-      <HoYoEnhance 便携包>.7z         便携 7z（检测到 7z 时才生成）
 
 .PARAMETER DistDir
     宿主发布输出目录，默认 <repo>\dist（由根目录 build.ps1 生成）。
@@ -141,7 +139,7 @@ Step "暂存应用目录 $AppDir"
 Copy-Item (Join-Path $DistDir "*") $AppDir -Recurse -Force
 Remove-ImageFiles $AppDir
 # 这些不该进安装包
-foreach ($junk in @("Setup", "$AppName.Install.*.exe", "$AppName.update.exe", "*.7z")) {
+foreach ($junk in @("Setup", "$AppName.Install.*.exe", "$AppName.update.exe")) {
     Get-ChildItem $AppDir -Filter $junk -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
 }
 foreach ($extra in @("USER_AGREEMENT.txt", "LICENSE", "config.example.json")) {
@@ -179,35 +177,6 @@ try {
     Ok("安装器 → $OutDir\$InstallName")
 } finally {
     Pop-Location
-}
-
-# ------------------------------------------------------------------ 便携包
-$PortableName = "$AppName-portable-win-x64"
-$PortableDir  = Join-Path $OutDir $PortableName
-if (Test-Path $PortableDir) { Remove-Item $PortableDir -Recurse -Force }
-New-Item -ItemType Directory -Force -Path $PortableDir | Out-Null
-Copy-Item (Join-Path $AppDir "*") $PortableDir -Recurse -Force
-Remove-ImageFiles $PortableDir
-
-$zip = Join-Path $OutDir "$PortableName.zip"
-if (Test-Path $zip) { Remove-Item $zip -Force }
-Compress-Archive -Path $PortableDir -DestinationPath $zip -Force
-Ok("便携 zip → $zip")
-
-$seven = $null
-foreach ($cand in @("7z", "$env:ProgramFiles\7-Zip\7z.exe", "${env:ProgramFiles(x86)}\7-Zip\7z.exe")) {
-    if ($cand -eq "7z") {
-        $cmd = Get-Command 7z -ErrorAction SilentlyContinue
-        if ($cmd) { $seven = $cmd.Source; break }
-    } elseif (Test-Path $cand) { $seven = $cand; break }
-}
-if ($seven) {
-    $arc = Join-Path $OutDir "${AppName}_v$Version.7z"
-    if (Test-Path $arc) { Remove-Item $arc -Force }
-    & $seven a -t7z $arc $AppDir -mx=5 -mf=BCJ2 -r -y | Out-Null
-    if ($LASTEXITCODE -eq 0) { Ok("便携 7z → $arc") } else { Write-Warning "7z 打包失败（exit $LASTEXITCODE）" }
-} else {
-    Write-Host "    未检测到 7z，跳过 .7z 便携包" -ForegroundColor DarkYellow
 }
 
 Write-Host ""

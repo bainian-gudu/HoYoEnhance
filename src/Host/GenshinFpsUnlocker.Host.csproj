@@ -11,7 +11,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWindowsForms>true</UseWindowsForms>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <!-- FDD：不打包 .NET 运行时（减小包体）；应用程序集仍随 publish 输出。 -->
+    <!-- 工程本身保持 FDD，才能被 hosttest 直接引用；发布阶段由 build.ps1 强制
+         self-contained=true，单用户产物仍不依赖本机 .NET Desktop Runtime。 -->
     <SelfContained>false</SelfContained>
     <PublishSelfContained>false</PublishSelfContained>
     <PublishReadyToRun>false</PublishReadyToRun>

@@ -6,7 +6,7 @@ namespace GenshinFpsUnlocker.Host;
 ///
 /// 安装 / 卸载只有一种实现：Kachina 安装器（packaging/ 打包出的安装包，
 /// 安装目录内自带卸载程序与更新程序）。
-/// 宿主自身不再提供 --install / --uninstall、Uninstall.cmd 垫片、自写 ARP 卸载项、
+/// 宿主自身不解析安装 / 卸载命令行，也没有 Uninstall.cmd 垫片、自写 ARP 卸载项、
 /// 内置白名单删目录等任何「第二种安装卸载方式」；本进程也不会为安装目的主动提权。
 /// </summary>
 internal static class Program
@@ -107,7 +107,7 @@ internal static class Program
             {
                 MessageBox.Show(
                     "启动失败：\n" + (ex?.Message ?? e.ExceptionObject?.ToString() ?? "unknown") +
-                    "\n\n若以标准用户运行，请确认已安装 .NET Desktop Runtime 9 与 WebView2。\n" +
+                    "\n\n若以标准用户运行，请确认系统已安装 WebView2 Runtime。\n" +
                     "日志：用户数据目录\\logs\\",
                     AppPaths.ProductTitle,
                     MessageBoxButtons.OK,
@@ -190,29 +190,6 @@ internal static class Program
             return;
         }
 
-        // ---- 安装/卸载命令行 ----
-        // 安装与卸载统一由 Kachina 完成（安装目录内的卸载程序，
-        // 或「设置 → 应用和功能」里由 Kachina 注册的卸载项）。带这些参数启动时只提示
-        // 用户改用 Kachina，程序自己不碰文件系统。
-        if (args.Any(a => a is "--install" or "/install" or "--uninstall" or "/uninstall"))
-        {
-            AppLog.Warn("安装/卸载由 Kachina 负责，忽略参数: " + string.Join(' ', args));
-            if (!quiet)
-            {
-                MessageBox.Show(
-                    "本程序已不再自带安装 / 卸载功能。\n\n" +
-                    "• 卸载：运行安装目录下的卸载程序，\n" +
-                    "  或在「设置 → 应用 → 安装的应用」里卸载「" + AppPaths.ProductDisplayName + "」。\n" +
-                    "• 安装 / 更新：使用最新 HoYoEnhance 安装包，\n" +
-                    "  或安装目录下的更新程序。",
-                    AppPaths.ProductDisplayName,
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
-            }
-            AppLog.Shutdown();
-            return;
-        }
-
         // ---- 单实例：Global 失败自动 Local（非管理员关键路径）----
         using var instance = new SingleInstance();
         var elevatedHandoff = args.Any(a => a is "--elevated-handoff");
@@ -260,11 +237,11 @@ internal static class Program
         _activeInstance = instance;
         AppLog.Info("single-instance acquired: " + (instance.Name ?? "(none)"));
 
-        // ---- 运行时依赖 ----
-        if (!RuntimePrerequisite.EnsureOrPrompt(quiet || isAutostart))
+        // ---- 运行时依赖：.NET 已自包含，只剩 WebView2 ----
+        if (!WebView2Prerequisite.EnsureOrPrompt(quiet || isAutostart))
         {
             AppLog.Error("运行时前置条件不满足 — 退出" +
-                         (isAutostart ? "（autostart launch：.NET Desktop Runtime / WebView2 缺失或损坏）" : ""));
+                         (isAutostart ? "（autostart launch：WebView2 缺失或损坏）" : ""));
             AppLog.Shutdown();
             return;
         }

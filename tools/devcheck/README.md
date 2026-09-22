@@ -22,7 +22,7 @@ pwsh tools/devcheck/devcheck.ps1 -Layer ui          # 不在 all 里：要先 cd
 | --- | --- | --- | --- |
 | `vendor` | **安装器工具链只在 Kirara**：本仓库没有内嵌 kachina 源码、不是 submodule；工作流与打包脚本除从 Kirara 最新 Release 下载 `kirara-builder.exe` 外，没有其它从外部拉源码 / 下二进制的动作 | pwsh 7 | <0.1s |
 | `ps1` | 仓库里全部 `.ps1` 的语法（PowerShell Parser） | pwsh 7 | <0.1s |
-| `packaging` | **打包配置与宿主源码的接线**：`packaging/packaging.config.json` 的品牌名 / 旧品牌兼容名 / 卸载时要回收的注册表值、计划任务、快捷方式、用户数据目录、协议正文、更新源，逐项与 `src/Host` 里的常量交叉断言 | pwsh 7 | ~0.1s |
+| `packaging` | **打包配置与宿主源码的接线**：`packaging/packaging.config.json` 的品牌名 / 卸载时要回收的注册表值、计划任务、快捷方式、单用户数据目录、协议正文、更新源，以及 Host 固定自包含、不再生成便携包，逐项与 `src/Host` / 根脚本交叉断言 | pwsh 7 | ~0.1s |
 | `host` | `src/Host` 的 `dotnet build -c Release -p:EnableWindowsTargeting=true` | .NET 9 SDK | ~2–8s |
 | `contract` | `src/Contracts` 的 C# DTO → `src/Ui/src/lib/bridge.generated.ts` 生成一致性；改了 DTO 不重新生成 TS 会失败 | .NET 9 SDK | ~2–5s |
 | `hosttest` | Host 的**行为断言**（自包含测试台，不依赖 xunit/MSTest）：`ProcessRunner` 的正常退出 / 非 0 退出码 / 超时杀进程树 / 启动失败 / 双管道并发读 / **孙进程继承管道写端时不干等**；`GameLocator` 的自定义目录快扫命中、系统目录与 installer 剪枝、`_Data` 在上一层的布局、同名假 exe 排除、主程序名判定、快捷方式目标反推；`WindowLocationState` 的窗口位置落盘判据（先把新位置写进内存配置也不能因此跳过落盘）。Linux/macOS 只验证测试台能编译，断言在 windows-latest 上真跑 | .NET 9 SDK | 首次 ~8s，之后 ~4s |
@@ -57,18 +57,21 @@ pwsh tools/devcheck/devcheck.ps1 -Layer ui          # 不在 all 里：要先 cd
 ## `packaging` 层：配置与宿主不能各说各话
 
 `packaging/packaging.config.json` 是「应用侧」的唯一事实来源：安装目录、ARP 名称、
-旧品牌兼容名、卸载时要清理的注册表 / 计划任务 / 快捷方式 / 用户数据目录、UAC 策略、
-协议文件、运行库。安装器只读它，所以「改了宿主却忘了改配置」只能在这里发现 ——
+卸载时要清理的注册表 / 计划任务 / 快捷方式、单用户数据目录、UAC 策略、协议文件。
+单用户基线还在这里守住两条发布不变量：Host 固定自包含（`build.ps1` 里
+`--self-contained true`）、安装器不再安装运行库且 `pack.ps1` 不再生成便携包。
+安装器只读它，所以「改了宿主却忘了改配置」只能在这里发现 ——
 每一项都拿 `src/Core/AppPaths.cs` / `Autostart.cs` 里的常量交叉断言，而不是在检查里
 再抄一遍字面量（`AppPaths.cs` 里 `ProductName + ".exe"` 这类表达式会被解析后求值）。
 
 ## `-SelfTest`：证明这套检查不是空壳
 
-检查工具最大的风险是「跑通了但其实什么都没查」。`-SelfTest` 会注入 12 个错误，逐个确认
+检查工具最大的风险是「跑通了但其实什么都没查」。`-SelfTest` 会注入 15 个错误，逐个确认
 对应层会失败：把 kachina 源码搬回仓库、工作流里加一条 `Invoke-WebRequest`、把打包脚本
 的 `$KiraraRepo` 改名、把 `build.yml` 里的 Kirara Release 仓库改成别家、让 `-BuilderPath`
 不再跳过 Kirara 查找、让 builder 路径不再固化绝对路径、放一个语法错误的 `.ps1`、改坏
-`packaging.config.json` 的 `exeName`、拿掉 `ProcessRunner` 超时路径的 `KillTree`、
+`packaging.config.json` 的 `exeName`、让 Host 不再自包含、把运行库安装包加回来、
+把便携包分支加回来、拿掉 `ProcessRunner` 超时路径的 `KillTree`、
 删掉 `GameLocator` 剪枝表里的系统目录行、改了 C# DTO 但不重新生成 TypeScript 契约。
 
 自检会临时改写**仓库里的真实文件**，因此有两个保护：

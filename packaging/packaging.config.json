@@ -19,9 +19,7 @@
   "windowTitle": "HoYoEnhance 安装程序",
   "ignoreFolderPath": [],
   "userDataPath": [
-    "%LOCALAPPDATA%/HoYoEnhance",
-    "%APPDATA%/HoYoEnhance",
-    "%USERPROFILE%/Documents/HoYoEnhance"
+    "%LOCALAPPDATA%/HoYoEnhance"
   ],
   "extraUninstallPath": [
     "${INSTALL_PATH}/HoYoEnhance.exe",
@@ -48,8 +46,5 @@
   "agreementFile": "../USER_AGREEMENT.txt",
   "agreementFormat": "text",
   "agreementTitle": "用户协议",
-  "runtimes": [
-    "Microsoft.DotNet.DesktopRuntime.9",
-    "Microsoft.VCRedist.2015+.x64"
-  ]
+  "runtimes": []
 }

@@ -256,14 +256,13 @@ internal sealed partial class UiBridge
         }
     }
 
-    /// <summary>
-    /// 读取调用参数里的 <c>game</c> 键（前端每个游戏相关调用都会带）；
-    /// 缺省或非法时用界面上当前选中的游戏，保持与旧前端兼容。
-    /// </summary>
+    /// <summary>读取调用参数里的 <c>game</c> 键；当前协议要求每个游戏相关调用都必须带。</summary>
     private GameId ReadGameParam(JsonObject p)
     {
         var key = TryGetString(p["game"]);
-        return GameCatalog.TryParseKey(key, out var game) ? game : _service.DisplayGame;
+        return GameCatalog.TryParseKey(key, out var game)
+            ? game
+            : throw new InvalidOperationException("缺少或非法的 game 参数");
     }
 
 }

@@ -10,8 +10,8 @@
              submodule；CI 只从 Kirara 最新 Release 下载 kirara-builder.exe，
              不从其它来源拉源码 / 下二进制
       ps1    所有 .ps1 的语法解析（PowerShell Parser，秒级，无依赖）
-      packaging 安装包配置与宿主源码的接线：品牌名 / 旧品牌兼容名 / 卸载时要回收的
-             注册表值、计划任务、快捷方式、用户数据目录、协议正文、更新源
+      packaging 安装包配置与宿主源码的接线：品牌名 / 卸载时要回收的注册表值、计划任务、
+             快捷方式、单用户数据目录、协议正文、更新源、自包含发布
       host   src/Host 的 dotnet build（Release，EnableWindowsTargeting）。只证明它编得过，
              不证明它算得对。
       contract C# DTO → TypeScript 桥接类型的生成一致性：DTO 改了但 TS 没重生成就失败。

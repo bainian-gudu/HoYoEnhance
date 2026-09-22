@@ -1,16 +1,15 @@
-using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
 namespace GenshinFpsUnlocker.Host;
 
 /// <summary>
 /// Windows 10 / Windows 11 兼容性检测与说明。
-/// .NET 8 官方最低：Windows 10 1607 (10.0.14393) 及以上；本工具按 x64 桌面验证 Win10 + Win11。
+/// 单用户基线只支持 x64 Windows 10 1607 (10.0.14393) 及以上；不满足时明确退出。
 /// </summary>
 [SupportedOSPlatform("windows")]
 internal static class OsCompatibility
 {
-    /// <summary>Windows 10 1607 内部版本（.NET 8 常见下限）。</summary>
+    /// <summary>Windows 10 1607 内部版本。</summary>
     public const int MinBuildNumber = 14393;
 
     /// <summary>是否为 64 位操作系统（游戏与 Stub 均为 x64）。</summary>
@@ -67,7 +66,7 @@ internal static class OsCompatibility
     }
 
     /// <summary>
-    /// 启动时检查；不满足则提示。
+    /// 启动时检查；不满足则提示并返回 false，不再提供“继续尝试”的旁路。
     /// quiet/autostart 时不弹窗，仅记日志并返回 false。
     /// </summary>
     public static bool EnsureOrPrompt(bool quiet)
@@ -99,14 +98,13 @@ internal static class OsCompatibility
             return false;
         }
 
-        var r = MessageBox.Show(
+        MessageBox.Show(
             "本软件需要：\n" +
             "• 64 位 Windows 10（1607 及以上）或 Windows 11\n\n" +
-            "检测结果：\n" + detail + "\n\n" +
-            "是否仍要继续尝试启动？（不保证可用）",
+            "检测结果：\n" + detail,
             AppPaths.ProductDisplayName + " — 系统要求",
-            MessageBoxButtons.YesNo,
-            MessageBoxIcon.Warning);
-        return r == DialogResult.Yes;
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Error);
+        return false;
     }
 }

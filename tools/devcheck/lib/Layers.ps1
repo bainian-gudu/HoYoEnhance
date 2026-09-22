@@ -98,7 +98,7 @@ function Test-KiraraBoundary {
 
 function Test-PackagingProfile {
     # packaging/packaging.config.json 是「应用侧」的唯一事实来源：安装目录、ARP 名称、
-    # 旧品牌兼容名、卸载时要清理的注册表 / 计划任务 / 快捷方式 / 用户数据目录。
+    # 卸载时要清理的注册表 / 计划任务 / 快捷方式 / 用户数据目录。
     # 安装器工具链（Kirara）只读它，所以「改了宿主却忘了改配置」只能在这里发现 ——
     # 每一项都拿宿主源码里的常量交叉断言，而不是在检查里再抄一遍字面量。
     $cfgPath = Join-Path $RepoRoot 'packaging/packaging.config.json'
@@ -165,18 +165,15 @@ function Test-PackagingProfile {
         Want "extraUninstallLnkNames 覆盖 $lnk" (HasValue $cfg.extraUninstallLnkNames $lnk) "$($cfg.extraUninstallLnkNames -join ',')"
     }
 
-    # 4) 用户数据目录：宿主的三条回退链都要被卸载器覆盖，且都是「%VAR%/…/产品名」形状
+    # 4) 用户数据目录：单用户基线只认 LocalAppData 一处，且是「%VAR%/…/产品名」形状
     $dataPaths = @($cfg.userDataPath)
-    Want 'userDataPath 非空' ($dataPaths.Count -gt 0) ''
+    Want 'userDataPath 只保留 LocalAppData 一处' ($dataPaths.Count -eq 1) "$($dataPaths -join ' | ')"
     foreach ($entry in $dataPaths) {
         $t = "$entry".TrimEnd('/', '\')
         $ok = $t.StartsWith('%') -and $t.EndsWith($productName) -and ($t.Split([char[]]@('/', '\')).Count -ge 2)
         Want "userDataPath 形状合法：$entry" $ok '需要 %VAR%/…/产品名，不能是容器本身'
     }
-    foreach ($var in @('%LOCALAPPDATA%', '%APPDATA%', '%USERPROFILE%/Documents')) {
-        $hit = $dataPaths | Where-Object { "$_" -like "$var/*" }
-        Want "userDataPath 覆盖宿主回退目录 $var" ($null -ne $hit) "$($dataPaths -join ' | ')"
-    }
+    Want 'userDataPath 指向 %LOCALAPPDATA%/产品名' (HasValue $dataPaths "%LOCALAPPDATA%/$productName") "$($dataPaths -join ' | ')"
 
     # 5) 协议正文与更新源
     $agreement = Join-Path (Split-Path -Parent $cfgPath) $cfg.agreementFile
@@ -188,15 +185,19 @@ function Test-PackagingProfile {
     $uri = @($cfg.source)[0].uri
     Want 'source 指向本仓库的 Release 安装包' ("$uri" -like "*$expectedUri") "$uri"
 
-    # 6) 运行库与提权策略
-    Want 'runtimes 含 .NET Desktop Runtime 9' (@($cfg.runtimes) -contains 'Microsoft.DotNet.DesktopRuntime.9') "$($cfg.runtimes -join ',')"
-    Want 'runtimes 含 VCRedist' (@($cfg.runtimes) -contains 'Microsoft.VCRedist.2015+.x64') "$($cfg.runtimes -join ',')"
+    # 6) 发布方式与提权策略：单用户基线固定自包含，不再由安装器装 .NET / VCRedist；
+    #    安装产物只有安装器，不再生成便携包。
+    $buildScript = [System.IO.File]::ReadAllText((Join-Path $RepoRoot 'build.ps1'))
+    Want 'build.ps1 固定发布 self-contained' ($buildScript -match '"--self-contained",\s*"true"') 'Host 必须自包含，不再依赖本机 .NET Desktop Runtime'
+    Want 'runtimes 不再安装 .NET / VCRedist' (@($cfg.runtimes).Count -eq 0) "$($cfg.runtimes -join ',')"
+    $packScript = [System.IO.File]::ReadAllText((Join-Path $RepoRoot 'packaging/pack.ps1'))
+    Want 'pack.ps1 不再生成便携 zip / 7z' ($packScript -notmatch 'Compress-Archive|PortableName') '单用户基线只产出安装器'
     Want 'uacStrategy 为 prefer-admin' ($cfg.uacStrategy -eq 'prefer-admin') "$($cfg.uacStrategy)"
 
     if ($bad.Count) {
         throw "安装包配置与宿主源码不一致（$($bad.Count) 项）：`n   - " + ($bad -join "`n   - ")
     }
-    return "配置与宿主一致：$displayName / regName=$productName / 任务=$taskName / 数据目录 $($dataPaths.Count) 条"
+    return "配置与宿主一致：$displayName / regName=$productName / 任务=$taskName / 单数据目录 / 自包含发布"
 }
 
 function Test-Ps1Syntax {

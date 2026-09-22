@@ -6,7 +6,7 @@ namespace GenshinFpsUnlocker.Host;
 ///   数据目录：用户数据目录                         （config.json、logs）
 ///   安装/卸载：只有 Kachina 一种（Install.exe + 安装目录 *.uninst.exe / *.update.exe）
 ///              宿主自身不提供任何安装/卸载入口，也不写 ARP 卸载注册表
-///   运行库：安装器可装 .NET Desktop；运行时仍可检测；无 Node/Python 等语言依赖
+///   运行库：Host 自包含 .NET；仅 WebView2 由系统提供；无 Node/Python 等语言依赖
 /// 所有路径访问尽量经 <see cref="PathUtil"/> 规范化，兼容中文目录。
 /// </summary>
 internal static class AppPaths
@@ -71,7 +71,7 @@ internal static class AppPaths
 
     /// <summary>
     /// 每用户可写数据目录（配置不得放在 Program Files 下，否则无管理员权限无法保存）。
-    /// 探测一次后缓存：LocalAppData → AppData → 文档。
+    /// 单用户基线只认 LocalAppData；创建或写探测失败时直接报错，不再猜测旁路目录。
     /// </summary>
     public static string DataDirectory
     {
@@ -82,40 +82,18 @@ internal static class AppPaths
             {
                 if (_dataDirectory is not null) return _dataDirectory;
 
-                // 优先 LocalAppData（标准、本机持久化）
-                var candidates = new[]
-                {
-                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), ProductName),
-                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ProductName),
-                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), ProductName),
-                };
-                Exception? last = null;
-                foreach (var dir in candidates)
-                {
-                    if (string.IsNullOrWhiteSpace(dir)) continue;
-                    try
-                    {
-                        PathUtil.EnsureDir(dir);
-                        // 探测可写
-                        var probe = Path.Combine(dir, ".write_test");
-                        File.WriteAllText(probe, "ok");
-                        File.Delete(probe);
-                        _dataDirectory = PathUtil.Normalize(dir);
-                        return _dataDirectory;
-                    }
-                    catch (Exception ex)
-                    {
-                        last = ex;
-                    }
-                }
-                // 最后回退：仍返回 LocalAppData 路径（调用方 Save 时再报错）
-                var fallback = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    ProductName);
-                try { Directory.CreateDirectory(fallback); } catch { /* ignore */ }
-                if (last is not null)
-                    AppLog.Warn("DataDirectory writable probe failed: " + last.Message);
-                _dataDirectory = PathUtil.Normalize(fallback);
+                var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                if (string.IsNullOrWhiteSpace(localAppData))
+                    throw new IOException("系统没有返回 LocalAppData 目录");
+
+                var dir = Path.Combine(localAppData, ProductName);
+                PathUtil.EnsureDir(dir);
+
+                // 写入探测：目录存在不等于可写，启动阶段失败比保存时才报错清楚。
+                var probe = Path.Combine(dir, ".write_test");
+                File.WriteAllText(probe, "ok");
+                File.Delete(probe);
+                _dataDirectory = PathUtil.Normalize(dir);
                 return _dataDirectory;
             }
         }

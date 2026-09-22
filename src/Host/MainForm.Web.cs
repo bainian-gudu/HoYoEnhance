@@ -237,7 +237,7 @@ internal sealed partial class MainForm : Form
             Height = 36,
             Location = new Point(312, 430),
         };
-        btnWeb.Click += (_, _) => RuntimePrerequisite.OpenUrl(RuntimePrerequisite.WebView2RuntimeUrl);
+        btnWeb.Click += (_, _) => WebView2Prerequisite.OpenUrl(WebView2Prerequisite.WebView2RuntimeUrl);
 
         panel.Controls.Add(title);
         panel.Controls.Add(body);

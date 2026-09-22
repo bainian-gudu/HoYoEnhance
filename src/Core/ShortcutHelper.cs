@@ -64,7 +64,7 @@ internal static class ShortcutHelper
         else
         {
             TryDelete(uninstLnk);
-            AppLog.Info("未找到 Kachina 卸载程序（便携/开发目录）— 不创建卸载快捷方式");
+            AppLog.Info("未找到 Kachina 卸载程序（开发目录）— 不创建卸载快捷方式");
         }
     }
 

@@ -2,12 +2,12 @@
 # 依赖策略：
 #   - 应用 DLL / Stub（静态 CRT + 内嵌 MinHook）等 → 打进安装载荷（自带）
 #   - 无 Node / Python 等语言运行时依赖
-#   - .NET Desktop Runtime / VCRedist → Kachina 安装器按 runtimes 配置处理
+#   - .NET Desktop Runtime 随 Host 自包含发布；Stub 静态 CRT，不需要 VCRedist
 # 安装器：只有一种 —— Kachina。工具链（kachina 源码快照 → kachina-builder）已拆到
 #         独立项目 Kirara（默认同级目录 ..\Kirara），本项目只保留配置与打包脚本
 #         产物 <HoYoEnhance 安装包>.exe，安装目录含 uninst.exe / update.exe
 #         宿主自身不再有 --install / --uninstall 等任何自带安装卸载路径
-# 默认：主程序 FDD（包体小）。离线全量：.\build.ps1 -SelfContained
+# 单用户重构后固定自包含发布；-SelfContained 参数仅为兼容现有 CI 工作流输入保留。
 #
 # 用法：
 #   .\build.ps1                     # 编译 + 打包（首次会从源码构建 kachina-builder）
@@ -41,9 +41,11 @@ $contractGen = Join-Path $Root "tools/contract-gen/HoYoEnhance.ContractGen.cspro
 & dotnet run --project $contractGen --no-launch-profile -- --check --out (Join-Path $Root "src/Ui/src/lib/bridge.generated.ts")
 if ($LASTEXITCODE -ne 0) { throw "C# DTO 与 TypeScript 桥接契约不一致" }
 
-$hostSelfContained = [bool]$SelfContained
-$hostLabel = if ($hostSelfContained) { "self-contained" } else { "framework-dependent" }
-Write-Host "==> Host publish mode: $hostLabel" -ForegroundColor Cyan
+$hostLabel = "self-contained"
+Write-Host "==> Host publish mode: $hostLabel (win-x64)" -ForegroundColor Cyan
+if (-not $SelfContained) {
+    Write-Host "    CI 未显式传 -SelfContained；当前基线仍固定自包含发布" -ForegroundColor DarkGray
+}
 
 $legacyImageExtensions = @(".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff")
 function Remove-LegacyImageFiles([string]$path) {
@@ -105,7 +107,7 @@ $publishArgs = @(
     "-c", $Configuration,
     "-r", "win-x64",
     "-o", $dist,
-    "--self-contained", $(if ($hostSelfContained) { "true" } else { "false" }),
+    "--self-contained", "true",
     "-p:PublishSingleFile=false",
     "-p:IncludeNativeLibrariesForSelfExtract=true",
     "-p:PublishTrimmed=false"
@@ -210,7 +212,7 @@ Write-Host "==> Done (host=$hostLabel). Output: $dist\" -ForegroundColor Green
 Get-ChildItem $dist | Format-Table Name, Length
 Write-Host ""
 Write-Host "Install: artifacts\<HoYoEnhance 安装包>.exe (Kachina，含 uninst/update)" -ForegroundColor Cyan
-Write-Host "Note: 默认 FDD；安装器可按配置安装 .NET Desktop Runtime 9 + VCRedist。" -ForegroundColor DarkGray
+Write-Host "Note: Host 已自包含 .NET 9；仅系统需要 WebView2 Runtime。" -ForegroundColor DarkGray
 
 if ($Install) {
     $gui = $installExePath
