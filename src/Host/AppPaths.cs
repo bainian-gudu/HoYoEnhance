@@ -2,7 +2,7 @@ namespace GenshinFpsUnlocker.Host;
 
 /// <summary>
 /// 标准目录布局约定：
-///   安装目录：打包配置指定的目录（兼容旧版升级时沿用原目录）
+///   安装目录：打包配置指定的目录
 ///   数据目录：用户数据目录                         （config.json、logs）
 ///   安装/卸载：只有 Kachina 一种（Install.exe + 安装目录 *.uninst.exe / *.update.exe）
 ///              宿主自身不提供任何安装/卸载入口，也不写 ARP 卸载注册表
@@ -11,11 +11,15 @@ namespace GenshinFpsUnlocker.Host;
 /// </summary>
 internal static class AppPaths
 {
-    /// <summary>历史内部标识（数据目录、注册表键、互斥体等，升级兼容用）。</summary>
-    public const string ProductName = "GenshinFpsUnlocker";
+    /// <summary>
+    /// 产品标识：数据目录、注册表键、互斥体、ARP 项、计划任务名都用它。
+    /// 改名（GenshinFpsUnlocker → HoYoEnhance）已完成，旧标识的兼容代码全部移除；
+    /// 从这里改名的代价是旧数据目录 / 卸载项 / 自启项变成孤儿，改名前先卸载旧版。
+    /// </summary>
+    public const string ProductName = "HoYoEnhance";
 
     /// <summary>面向用户的显示名（品牌名，托盘提示、快捷方式、通知都用它）。</summary>
-    public const string ProductDisplayName = "HoYoEnhance";
+    public const string ProductDisplayName = ProductName;
 
     /// <summary>开始菜单产品目录名。</summary>
     public const string StartMenuFolderName = ProductDisplayName;
@@ -23,17 +27,8 @@ internal static class AppPaths
     /// <summary>当前主程序文件名。</summary>
     public const string ExecutableFileName = ProductDisplayName + ".exe";
 
-    /// <summary>历史主程序文件名，仅用于升级识别。</summary>
-    public const string LegacyExecutableFileName = ProductName + ".exe";
-
     /// <summary>当前卸载程序文件名。</summary>
     public const string UninstallerFileName = ProductDisplayName + ".uninst.exe";
-
-    /// <summary>历史卸载程序文件名，仅用于升级识别。</summary>
-    public const string LegacyUninstallerFileName = ProductName + ".uninst.exe";
-
-    /// <summary>历史更新程序文件名，仅用于升级清理。</summary>
-    public const string LegacyUpdaterFileName = ProductName + ".update.exe";
 
     /// <summary>窗口标题。</summary>
     public const string ProductTitle = ProductDisplayName;
@@ -69,11 +64,6 @@ internal static class AppPaths
 
     /// <summary>Kachina 写入的卸载程序（开始菜单「卸载」快捷方式指向它）。</summary>
     public static string UninstExePath => Path.Combine(ExeDirectory, UninstallerFileName);
-
-    /// <summary>历史卸载程序路径，旧版升级后仍可能残留。</summary>
-    public static string LegacyUninstExePath => Path.Combine(ExeDirectory, LegacyUninstallerFileName);
-
-
 
     private static string? _dataDirectory;
     private static readonly object DataDirLock = new();
@@ -141,22 +131,6 @@ internal static class AppPaths
             var dir = Path.Combine(DataDirectory, "logs");
             PathUtil.EnsureDir(dir);
             return PathUtil.Normalize(dir);
-        }
-    }
-
-    /// <summary>
-    /// 旧版便携配置（exe 旁 config.json）。首次启动可迁移到 AppData。
-    /// </summary>
-    public static string? LegacyPortableConfigPath
-    {
-        get
-        {
-            try
-            {
-                var p = Path.Combine(ExeDirectory, "config.json");
-                return PathUtil.ExistsFile(p) ? p : null;
-            }
-            catch { return null; }
         }
     }
 

@@ -30,7 +30,7 @@ internal static class Autostart
     private const string StartupApprovedRunKey =
         @"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
     private const string ValueName = AppPaths.ProductName;
-    private const string ElevatedTaskName = "GenshinFpsUnlocker.AutoStart";
+    private const string ElevatedTaskName = "HoYoEnhance.AutoStart";
 
     /// <summary>登录自启动当前实际登记的通道。</summary>
     internal enum AutostartMode
@@ -559,15 +559,13 @@ internal static class Autostart
     }
 
     /// <summary>
-    /// Run 值是否指向本程序：按解析出的 exe 文件名匹配当前名或历史名。
-    /// 品牌改名后不能再按旧产品名字符串判断。
+    /// Run 值是否指向本程序：按解析出的 exe 文件名匹配当前产品名。
     /// </summary>
     internal static bool IsOwnRunValue(string? command)
     {
         var target = ParseTarget(command);
         if (target is null) return false;
         var name = Path.GetFileName(target);
-        return string.Equals(name, AppPaths.ExecutableFileName, StringComparison.OrdinalIgnoreCase)
-               || string.Equals(name, AppPaths.LegacyExecutableFileName, StringComparison.OrdinalIgnoreCase);
+        return string.Equals(name, AppPaths.ExecutableFileName, StringComparison.OrdinalIgnoreCase);
     }
 }

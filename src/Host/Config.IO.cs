@@ -6,15 +6,13 @@ namespace GenshinFpsUnlocker.Host;
 internal sealed partial class AppConfig
 {
     /// <summary>
-    /// 从磁盘加载配置。顺序：主文件 → .bak → .tmp → 便携 config.json；
+    /// 从磁盘加载配置。顺序：主文件 → .bak → .tmp；
     /// 全部失败则返回默认值（不在 Load 时写盘，避免覆盖用户残损文件前未备份）。
     /// </summary>
     public static AppConfig Load()
     {
         lock (IoLock)
         {
-            MigrateLegacyConfigIfNeeded();
-
             foreach (var path in EnumerateCandidateReadPaths())
             {
                 try
@@ -26,7 +24,6 @@ internal sealed partial class AppConfig
                     var cfg = JsonSerializer.Deserialize<AppConfig>(json, Options);
                     if (cfg is null) continue;
 
-                    cfg.Migrate();
                     cfg.Sanitize();
                     cfg.LoadedFromDisk = true;
                     AppLog.Info($"config loaded from {path}");
@@ -55,7 +52,6 @@ internal sealed partial class AppConfig
 
             AppLog.Warn("config not found or unreadable — using defaults");
             var defaults = new AppConfig();
-            defaults.Migrate();
             defaults.Sanitize();
             // 首次运行写出默认配置，确保目录与文件存在
             try { defaults.SaveCore(createBackup: false); }

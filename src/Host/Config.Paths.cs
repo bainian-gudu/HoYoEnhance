@@ -1,6 +1,6 @@
 namespace GenshinFpsUnlocker.Host;
 
-/// <summary><c>AppConfig</c> 的路径解析：候选读取位置、数据目录与旧版配置迁移。</summary>
+/// <summary><c>AppConfig</c> 的路径解析：候选读取位置与数据目录。</summary>
 internal sealed partial class AppConfig
 {
     private static IEnumerable<string> EnumerateCandidateReadPaths()
@@ -25,9 +25,6 @@ internal sealed partial class AppConfig
             }
         }
         catch { /* ignore */ }
-
-        var legacy = AppPaths.LegacyPortableConfigPath;
-        if (legacy is not null) list.Add(legacy);
 
         return list;
     }
@@ -56,26 +53,4 @@ internal sealed partial class AppConfig
         }
     }
 
-    /// <summary>
-    /// 若 AppData 尚无配置，而 exe 旁存在旧版 config.json，则复制一次到 AppData。
-    /// 不删除旧文件，避免便携场景误伤。
-    /// </summary>
-    private static void MigrateLegacyConfigIfNeeded()
-    {
-        try
-        {
-            if (PathUtil.ExistsFile(ConfigPath)) return;
-            var legacy = AppPaths.LegacyPortableConfigPath;
-            if (legacy is null) return;
-
-            PathUtil.EnsureDir(AppPaths.DataDirectory);
-            File.Copy(legacy, ConfigPath, overwrite: false);
-            try { File.Copy(legacy, BackupPath, overwrite: true); } catch { /* ignore */ }
-            AppLog.Info("migrated portable config → " + ConfigPath);
-        }
-        catch (Exception ex)
-        {
-            AppLog.Warn("config migrate: " + ex.Message);
-        }
-    }
 }

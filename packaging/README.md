@@ -83,7 +83,7 @@ kirara-builder.exe pack -c packaging\packaging.config.json -m metadata.json -d h
 中间目录用 `out\pack\`（已被 `.gitignore` 排除）。
 > 不要用 `build\`：Windows 路径大小写不敏感，会和历史上的 `Build\` 目录混淆。
 > 上述命令里的产品标识与输出文件名以 `packaging\pack.ps1`、`packaging.config.json`
-> 的实际兼容配置为准。
+> 的实际配置为准。
 
 ## Kachina 负责什么 / 不负责什么
 
@@ -101,7 +101,7 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 
 | 事项 | 归属 | 说明 |
 | --- | --- | --- |
-| 快捷方式的**显示名** | `src/Host/ShortcutHelper.cs` | Kachina 按 `shortcutName` 建 `HoYoEnhance.lnk`（桌面 + 开始菜单），宿主每次启动统一主项为 `HoYoEnhance.lnk`、卸载项为 `Uninstall HoYoEnhance.lnk`，并清掉内部名 / 历史中文名重复项；上游卸载器认不出的历史名靠 `extraUninstallLnkNames` 补删（见下） |
+| 快捷方式的**显示名** | `src/Host/ShortcutHelper.cs` | Kachina 按 `shortcutName` 建 `HoYoEnhance.lnk`（桌面 + 开始菜单），宿主每次启动统一主项为 `HoYoEnhance.lnk`、卸载项为 `Uninstall HoYoEnhance.lnk`，并清理重复项；卸载时由 `extraUninstallLnkNames` 补删（见下） |
 | 开机自启 | `src/Host/Autostart.cs` | 按配置项「开机自启动」+「启动时自动以管理员权限运行」同步，两种登记方式二选一：普通权限写 `HKCU\...\Run`，管理员权限登记任务计划程序里的兼容自启任务（`RunLevel=HighestAvailable`，登录不弹 UAC）。卸载时分别由 `packaging.config.json` 的 `extraUninstallRegistry` 与 `extraUninstallScheduledTasks` 交给卸载器回收（见下），不需要用户先手动关闭 |
 
 ## 本项目给 Kachina 加 / 改的配置项
@@ -109,29 +109,11 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 下面几项上游都没有（`userDataPath` 上游有字段但行为有坑），改动落在 Kirara 持有的源码
 快照里，逐处说明见 Kirara 的 `LOCAL_PATCHES.md`。
 
-### `legacyExeNames` / `legacyProgramFilesPaths` — 品牌改名后的升级识别
-
-当前安装包与主程序名为 `HoYoEnhance`，但历史安装目录和主程序仍是
-`GenshinFpsUnlocker`。安装器除检查当前 `exeName` 外，还会检查：
-
-- `legacyExeNames`：旧主程序名（当前为 `GenshinFpsUnlocker.exe`），用于把旧目录
-  识别为可原地升级，并结束仍在运行的旧主程序；
-- `legacyProgramFilesPaths`：旧默认安装目录（当前为 `GenshinFpsUnlocker`），
-  用于注册表缺失时兜底识别；
-- `legacyUninstallNames`：旧卸载器名，仅用于兼容识别；
-- `pack.ps1` 会把旧 exe / 卸载器 / 更新器及旧位图名写入 metadata 的 `deletes`，
-  更新时清理旧文件；宿主启动时还会对同一批固定文件名做一次兜底清理。
-
-更新时会重建开始菜单项（旧 exe 名已不存在）；桌面图标只在用户原本就有的时候
-由宿主改指当前 exe、历史命名顺带改回英文品牌名，**不会**给当初没勾「创建桌面
-快捷方式」的用户补建。卸载时旧目录、旧文件名与旧开始菜单文件夹由
-`extraUninstallPath` / `extraUninstallLnkNames` 尽力清理。
-
 ### `extraUninstallRegistry` — 卸载时清理安装期写入的注册表
 
 ```json
 "extraUninstallRegistry": [
-  { "hive": "HKCU", "key": "Software\\Microsoft\\Windows\\CurrentVersion\\Run", "value": "<历史兼容值名>" }
+  { "hive": "HKCU", "key": "Software\\Microsoft\\Windows\\CurrentVersion\\Run", "value": "HoYoEnhance" }
 ]
 ```
 
@@ -141,7 +123,7 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 | `key` | 子键路径 |
 | `value` | 给了就只删这一个值；省略则**递归删除整个子键**（`remove_tree`），慎用 |
 
-本项目宿主的开机自启写在 `HKCU\...\Run` 的历史兼容值上
+本项目宿主的开机自启写在 `HKCU\...\Run` 的 `HoYoEnhance` 值上
 （`src/Host/Autostart.cs`），所以卸载必须回收它。注意卸载器一般以管理员身份运行，
 此时 `HKCU` 指向的是管理员账户；因此 `hive: HKCU` 会**额外遍历 `HKEY_USERS`**
 下已加载的用户配置单元（跳过 `*_Classes`、`.DEFAULT`、`S-1-5-18`），
@@ -152,7 +134,7 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 
 ```json
 "extraUninstallScheduledTasks": [
-  "<历史兼容任务名>"
+  "HoYoEnhance.AutoStart"
 ]
 ```
 
@@ -177,16 +159,14 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 ```json
 "extraUninstallLnkNames": [
   "HoYoEnhance.lnk",
-  "Uninstall HoYoEnhance.lnk",
-  "卸载HoYoEnhance.lnk",
-  "<历史兼容快捷方式名>.lnk"
+  "Uninstall HoYoEnhance.lnk"
 ]
 ```
 
 只写**文件名**，目录由卸载器用 shell API 解析后拼出来，四侧都试：
 公共桌面 / 用户桌面、公共开始菜单 / 用户开始菜单下的 `{appName}\` 文件夹。
 这样即使用户桌面被 OneDrive 重定向、或宿主当初写在了另一侧，也能删干净。
-完整兼容别名以 `packaging\packaging.config.json` 为准。
+完整名单以 `packaging\packaging.config.json` 为准。
 
 这些路径走的是**尽力删除**：删不掉（无权限、被占用）只写日志，
 不会把卸载判为失败——上游 `extraUninstallPath` 的语义是删不掉就报错中断，

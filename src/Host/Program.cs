@@ -14,12 +14,6 @@ internal static class Program
     /// <summary>当前持有的单实例互斥；提权重启前需释放。</summary>
     private static SingleInstance? _activeInstance;
 
-    /// <summary>
-    /// 历史版本写下的安装标记文件名。安装统一走 Kachina 后本程序只读不写，
-    /// 仅用于识别早期的安装副本。
-    /// </summary>
-    private const string LegacyInstallMarkerFileName = "GenshinFpsUnlocker.install";
-
     /// <summary>释放单实例锁，供「以管理员重新启动」在拉起新进程前调用。</summary>
     internal static void ReleaseSingleInstance()
     {
@@ -148,8 +142,6 @@ internal static class Program
             $"args=[{string.Join(' ', args)}] admin={Elevation.IsAdministrator()} " +
             $"autostart={isAutostart} user={Environment.UserName} " +
             $"integrity={(Elevation.IsAdministrator() ? "high" : "medium")}");
-        LegacyInstallCleanup.TryCleanup();
-
         // 开机自启（静默）：任何提前退出都必须留下可检索的日志
         if (isAutostart)
             AppLog.Info("autostart launch active (silent): 后续任何退出都会记录原因");
@@ -334,19 +326,16 @@ internal static class Program
         }
         catch (Exception ex) { AppLog.Warn("Autostart: " + ex.Message); }
 
-        // 只对 Kachina 安装副本维护快捷方式：桌面图标由安装器按勾选一次性创建，
-        // 宿主仅在它已经存在时把旧 exe 目标 / 历史命名修成当前品牌（不新建图标）；
+        // 只对 Kachina 安装副本维护快捷方式：桌面图标由安装器按勾选一次性创建；
         // 开始菜单项每次启动重建，保证指向当前 exe。
         var isInstalledCopy =
             PathUtil.ExistsFile(AppPaths.UninstExePath)
-            || AppPaths.IsInstalledUnderProgramFiles()
-            || PathUtil.ExistsFile(Path.Combine(AppPaths.ExeDirectory, LegacyInstallMarkerFileName));
+            || AppPaths.IsInstalledUnderProgramFiles();
 
         if (isInstalledCopy)
         {
             try
             {
-                ShortcutHelper.RefreshDesktopShortcuts();
                 ShortcutHelper.CleanupDuplicateShortcuts();
                 ShortcutHelper.CreateStartMenuShortcuts(AppPaths.ExePath, AppPaths.ExeDirectory);
             }

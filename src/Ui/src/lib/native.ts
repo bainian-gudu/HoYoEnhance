@@ -138,8 +138,7 @@ function ensureListeners() {
 }
 
 function normalizeState(raw: any): NativeState {
-  // 宿主当前下发的是 v1 扁平 config（原神），parseConfig 会把它迁移到 games.genshin，
-  // 星穹铁道保留默认值；等宿主改为下发 games 结构后无需再改这里。
+  // 宿主与本地缓存使用同一套 games 结构，解析时只做字段校验与默认值补全。
   const config = parseConfig(raw.config ?? {});
   const isElevated = Boolean(raw.isElevated);
   return {

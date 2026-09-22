@@ -7,9 +7,8 @@ namespace GenshinFpsUnlocker.Host;
 /// <summary>
 /// 应用配置（JSON）。主路径：用户数据目录下的 config.json。
 /// 持久化策略：写临时文件 → Flush → File.Replace 原子替换 → 保留 .bak 备份；
-/// 读失败时依次尝试主文件 / .bak / .tmp / 便携旁路，降低丢失与半截写入风险。
-/// 配置里不认识的字段由反序列化器直接忽略，旧 config.json 仍能读入，
-/// 下次保存时自然消失。
+/// 读失败时依次尝试主文件 / .bak / .tmp，降低丢失与半截写入风险。
+/// 配置里不认识的字段由反序列化器直接忽略。
 /// </summary>
 internal sealed partial class AppConfig
 {
@@ -23,17 +22,9 @@ internal sealed partial class AppConfig
     public GameProfiles Games
     {
         get => _games;
-        set
-        {
-            _games = value ?? new GameProfiles();
-            GamesLoadedFromFile = true;
-        }
+        set => _games = value ?? new GameProfiles();
     }
     private GameProfiles _games = new();
-
-    /// <summary>磁盘上的配置是否带 <c>games</c> 段（用于决定要不要跑扁平结构迁移）。</summary>
-    [JsonIgnore]
-    public bool GamesLoadedFromFile { get; private set; }
 
     /// <summary>当前游戏档案（读配置的快捷方式）。</summary>
     [JsonIgnore]
@@ -63,9 +54,6 @@ internal sealed partial class AppConfig
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? WindowTop { get; set; }
 
-    /// <summary>配置 schema 版本（用于一次性迁移默认行为）。</summary>
-    public int ConfigSchemaVersion { get; set; } = 0;
-
     /// <summary>
     /// 是否随 Windows 登录自动启动（见 <see cref="Autostart.SyncLoginStartup"/>）：
     /// 默认写 HKCU\...\Run（标准权限）；与 <see cref="AutoStartAsAdministrator"/>
@@ -87,45 +75,6 @@ internal sealed partial class AppConfig
 
     /// <summary>监视循环基准轮询间隔（毫秒，200–10000）。</summary>
     public int PollIntervalMs { get; set; } = 1000;
-
-    // ---- 旧版扁平字段（v1 配置）----
-    // 这些属性只为读取旧 config.json 存在：迁移时合并进 games.genshin，随后置空，
-    // 下次保存就自然消失。新写的配置里不会再出现它们。
-
-    /// <summary>旧版字段：目标帧率（迁移到 games.genshin）。</summary>
-    [JsonPropertyName("targetFps")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public int? LegacyTargetFps { get; set; }
-
-    /// <summary>旧版字段：帧率解锁开关。</summary>
-    [JsonPropertyName("enabled")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public bool? LegacyEnabled { get; set; }
-
-    /// <summary>旧版字段：反角色虚化。</summary>
-    [JsonPropertyName("antiBlurPerspective")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public bool? LegacyAntiBlurPerspective { get; set; }
-
-    /// <summary>旧版字段：移除水下马赛克。</summary>
-    [JsonPropertyName("antiBlurDiveMosaic")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public bool? LegacyAntiBlurDiveMosaic { get; set; }
-
-    /// <summary>旧版字段：隐藏 UID。</summary>
-    [JsonPropertyName("hideUid")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public bool? LegacyHideUid { get; set; }
-
-    /// <summary>旧版字段：游戏路径（迁移到 games.genshin.gamePath）。</summary>
-    [JsonPropertyName("gamePath")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? LegacyGamePath { get; set; }
-
-    /// <summary>更早的字段别名：游戏路径。</summary>
-    [JsonPropertyName("gamePathHint")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? LegacyGamePathHint { get; set; }
 
     /// <summary>用户是否已确认过安全声明。</summary>
     public bool SafetyNoticeAcknowledged { get; set; } = false;
@@ -190,7 +139,7 @@ internal sealed partial class AppConfig
 
     private static readonly Encoding Utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
 
-    /// <summary>钳制数值范围并规范化游戏路径；执行 schema 迁移。</summary>
+    /// <summary>钳制数值范围并规范化游戏路径。</summary>
     public void Sanitize()
     {
         Games.Sanitize();
@@ -198,54 +147,4 @@ internal sealed partial class AppConfig
         LogRetainDays = Math.Clamp(LogRetainDays, 1, 90);
         if (string.IsNullOrWhiteSpace(LogLevel)) LogLevel = "Debug";
     }
-
-    /// <summary>
-    /// 一次性 schema 迁移。<b>只在从磁盘加载后调用，不要放进 <see cref="Sanitize"/></b>：
-    /// Sanitize() 会被「每次保存」和「UI 改配置」的热路径反复执行，把破坏性的默认值回退
-    /// 放里面会导致——用户在设置里刚勾选「启动后最小化到托盘」，同一次 PatchConfig 里的
-    /// Sanitize() 就把它抹回 false（表现为开关自己弹回去、重启后不进托盘）。
-    /// </summary>
-    private void Migrate()
-    {
-        // v1：旧默认 startMinimized=true 导致「打开没窗口」；一次性改回 false。
-        // 用户此后可再手动开启「启动后最小化到托盘」，之后的值一律尊重用户选择。
-        if (ConfigSchemaVersion < 1)
-        {
-            if (StartMinimized)
-            {
-                StartMinimized = false;
-                AppLog.Info("config migrate v1: StartMinimized false (show main window on launch)");
-            }
-            ConfigSchemaVersion = 1;
-        }
-
-        // v2：单游戏扁平字段 → 每个游戏一份的 games 段。
-        // 只在旧配置（没有 games 段）上执行：新配置里 games 是权威来源，
-        // 不能被残留的扁平键盖回去。迁移完成后把扁平键清空，下次保存即消失。
-        if (ConfigSchemaVersion < 2)
-        {
-            if (!GamesLoadedFromFile)
-            {
-                var genshin = Games.Genshin;
-                if (LegacyTargetFps is int fps) genshin.TargetFps = fps;
-                if (LegacyEnabled is bool enabled) genshin.Enabled = enabled;
-                if (LegacyAntiBlurPerspective is bool abp) genshin.AntiBlurPerspective = abp;
-                if (LegacyAntiBlurDiveMosaic is bool abm) genshin.AntiBlurDiveMosaic = abm;
-                if (LegacyHideUid is bool uid) genshin.HideUid = uid;
-                if (!string.IsNullOrWhiteSpace(LegacyGamePath)) genshin.GamePath = LegacyGamePath;
-                else if (!string.IsNullOrWhiteSpace(LegacyGamePathHint)) genshin.GamePath = LegacyGamePathHint;
-                AppLog.Info("config migrate v2: legacy flat fields → games.genshin");
-            }
-
-            LegacyTargetFps = null;
-            LegacyEnabled = null;
-            LegacyAntiBlurPerspective = null;
-            LegacyAntiBlurDiveMosaic = null;
-            LegacyHideUid = null;
-            LegacyGamePath = null;
-            LegacyGamePathHint = null;
-            ConfigSchemaVersion = 2;
-        }
-    }
-
 }

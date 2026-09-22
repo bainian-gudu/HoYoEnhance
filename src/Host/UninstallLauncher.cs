@@ -24,11 +24,7 @@ internal static class UninstallLauncher
     {
         try
         {
-            foreach (var path in new[] { AppPaths.UninstExePath, AppPaths.LegacyUninstExePath })
-            {
-                if (PathUtil.ExistsFile(path)) return path;
-            }
-            return null;
+            return PathUtil.ExistsFile(AppPaths.UninstExePath) ? AppPaths.UninstExePath : null;
         }
         catch
         {
@@ -88,8 +84,7 @@ internal static class UninstallLauncher
     private static bool IsTrustworthyUninstaller(string path, out string error)
     {
         var expectedName = Path.GetFileName(path);
-        if (!string.Equals(expectedName, AppPaths.UninstallerFileName, StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(expectedName, AppPaths.LegacyUninstallerFileName, StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(expectedName, AppPaths.UninstallerFileName, StringComparison.OrdinalIgnoreCase))
         {
             error = "卸载程序文件名不符合预期: " + expectedName;
             return false;

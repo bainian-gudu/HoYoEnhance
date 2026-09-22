@@ -10,7 +10,6 @@ internal sealed partial class UnlockService
 {
     /// <summary>
     /// 监视主循环：
-    /// 0) 先按固定节拍清理上一版本残留在原神目录里的代理组件
     /// 1) 总开关/自动监视关闭 → 空闲等待
     /// 2) 星穹铁道注册表解锁（与进程无关，按需核对）
     /// 3) 无游戏 → 长间隔轮询
@@ -27,9 +26,6 @@ internal sealed partial class UnlockService
         {
             try
             {
-                // 与解锁状态无关：残留清理是历史数据的回收，不注入、不改配置。
-                TryRunLegacyCleanup();
-
                 if (!_config.MasterEnabled)
                 {
                     PushConfigToIpc();
@@ -444,7 +440,6 @@ internal sealed partial class UnlockService
                 _config.TrySave(out _);
                 session.PathStatus = $"游戏路径: {profile.GamePath}（{GameLocator.SourceDisplayName(result.Source)}）";
                 AppLog.Info($"game path auto ({descriptor.Key}): {profile.GamePath} source={result.Source}");
-                if (descriptor.Id == GameId.Genshin) QueueLegacyCleanup();
                 Raise(forceUi: true);
             }
             catch (Exception ex)

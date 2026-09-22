@@ -9,55 +9,40 @@
   "appName": "HoYoEnhance",
   "shortcutName": "HoYoEnhance",
   "publisher": "HoYoEnhance",
-  "regName": "GenshinFpsUnlocker",
+  "regName": "HoYoEnhance",
   "exeName": "HoYoEnhance.exe",
-  "legacyExeNames": [
-    "GenshinFpsUnlocker.exe"
-  ],
   "uninstallName": "HoYoEnhance.uninst.exe",
-  "legacyUninstallNames": [
-    "GenshinFpsUnlocker.uninst.exe"
-  ],
   "updaterName": "HoYoEnhance.update.exe",
   "programFilesPath": "HoYoEnhance",
-  "legacyProgramFilesPaths": [
-    "GenshinFpsUnlocker"
-  ],
   "title": "HoYoEnhance",
   "description": "原神 / 崩坏：星穹铁道 · 自定义 FPS · 后台注入 · 托盘设置",
   "windowTitle": "HoYoEnhance 安装程序",
   "ignoreFolderPath": [],
   "userDataPath": [
-    "%LOCALAPPDATA%/GenshinFpsUnlocker",
-    "%APPDATA%/GenshinFpsUnlocker",
-    "%USERPROFILE%/Documents/GenshinFpsUnlocker"
+    "%LOCALAPPDATA%/HoYoEnhance",
+    "%APPDATA%/HoYoEnhance",
+    "%USERPROFILE%/Documents/HoYoEnhance"
   ],
   "extraUninstallPath": [
-    "${INSTALL_PATH}/GenshinFpsUnlocker.exe",
-    "${INSTALL_PATH}/GenshinFpsUnlocker.uninst.exe",
-    "${INSTALL_PATH}/GenshinFpsUnlocker.update.exe",
-    "%APPDATA%/Microsoft/Windows/Start Menu/Programs/GenshinFpsUnlocker",
-    "%ProgramData%/Microsoft/Windows/Start Menu/Programs/GenshinFpsUnlocker"
+    "${INSTALL_PATH}/HoYoEnhance.exe",
+    "${INSTALL_PATH}/HoYoEnhance.uninst.exe",
+    "${INSTALL_PATH}/HoYoEnhance.update.exe",
+    "%APPDATA%/Microsoft/Windows/Start Menu/Programs/HoYoEnhance",
+    "%ProgramData%/Microsoft/Windows/Start Menu/Programs/HoYoEnhance"
   ],
   "extraUninstallRegistry": [
     {
       "hive": "HKCU",
       "key": "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-      "value": "GenshinFpsUnlocker"
+      "value": "HoYoEnhance"
     }
   ],
   "extraUninstallScheduledTasks": [
-    "GenshinFpsUnlocker.AutoStart"
+    "HoYoEnhance.AutoStart"
   ],
   "extraUninstallLnkNames": [
     "HoYoEnhance.lnk",
-    "Uninstall HoYoEnhance.lnk",
-    "卸载HoYoEnhance.lnk",
-    "原神帧率解锁.lnk",
-    "卸载 HoYoEnhance.lnk",
-    "GenshinFpsUnlocker.lnk",
-    "GenshinFpsUnlocker.exe.lnk",
-    "Genshin FPS Unlocker.lnk"
+    "Uninstall HoYoEnhance.lnk"
   ],
   "uacStrategy": "prefer-admin",
   "agreementFile": "../USER_AGREEMENT.txt",

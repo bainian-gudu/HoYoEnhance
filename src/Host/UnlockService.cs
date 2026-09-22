@@ -6,8 +6,6 @@ namespace GenshinFpsUnlocker.Host;
 /// 核心后台服务：按游戏分别监视进程、注入各自的 Stub、经共享内存下发目标 FPS；
 /// 崩坏：星穹铁道的帧率不走注入，而是直接改注册表里的画面设置。
 /// UI / 托盘通过属性与 StateChanged 事件读取状态；本类负责节流以降低开销。
-/// 另外负责一次性回收上一版本「超分替换」留在原神目录里的代理组件
-/// （见 <see cref="LegacyProxyCleanup"/>）：只删不写，且不受解锁开关影响。
 /// </summary>
 internal sealed partial class UnlockService : IDisposable
 {
@@ -85,12 +83,6 @@ internal sealed partial class UnlockService : IDisposable
     private volatile int _lastPushedEnabled = int.MinValue;
     private long _lastIpcPushTick;
     private long _lastUiRaiseTick;
-
-    // ---- 历史残留组件清理（见 LegacyProxyCleanup，仅原神） ----
-    /// <summary>游戏目录里是否还可能有上一版本部署的代理组件（1 = 需要重试清理）。</summary>
-    private int _legacyCleanupPending;
-    /// <summary>下一次允许重试清理的时刻（TickCount64）：文件被游戏占用时不必每轮都撞一遍。</summary>
-    private long _nextLegacyCleanupTick;
 
     /// <summary>状态变化（UI 应 Invoke 到 UI 线程后刷新）。</summary>
     public event Action? StateChanged;
@@ -231,29 +223,6 @@ internal sealed partial class UnlockService : IDisposable
         if (DisplayGame == game) return;
         Volatile.Write(ref _displayGameValue, (int)game);
         Raise(forceUi: true);
-    }
-
-    /// <summary>
-    /// 游戏路径确定或变化后，标记「需要检查上一版本残留在游戏目录里的代理组件」。
-    /// 实际删除在监视循环的固定节拍里做：文件被运行中的游戏占用时下一轮继续重试。
-    /// 该清理只针对原神（历史版本只在原神目录里部署过代理组件）。
-    /// </summary>
-    public void QueueLegacyCleanup()
-    {
-        Volatile.Write(ref _nextLegacyCleanupTick, 0);
-        Interlocked.Exchange(ref _legacyCleanupPending, 1);
-    }
-
-    /// <summary>监视循环节拍：清理尚未删掉的残留组件（没有待处理项时几乎零开销）。</summary>
-    private void TryRunLegacyCleanup()
-    {
-        if (Volatile.Read(ref _legacyCleanupPending) == 0) return;
-        var now = Environment.TickCount64;
-        if (now < Volatile.Read(ref _nextLegacyCleanupTick)) return;
-        Volatile.Write(ref _nextLegacyCleanupTick, now + 10_000);
-
-        if (LegacyProxyCleanup.TryCleanup(_config.Profile(GameId.Genshin).GamePath))
-            Interlocked.Exchange(ref _legacyCleanupPending, 0);
     }
 
     /// <summary>
@@ -403,7 +372,6 @@ internal sealed partial class UnlockService : IDisposable
         {
             profile.GamePath = PathUtil.Normalize(profile.GamePath);
             session.PathStatus = $"游戏路径: {profile.GamePath}（{GameLocator.SourceDisplayName(GameLocateSource.Config)}）";
-            if (game == GameId.Genshin) QueueLegacyCleanup();
             return GameLocateResult.Success(profile.GamePath!, GameLocateSource.Config);
         }
 
@@ -426,7 +394,6 @@ internal sealed partial class UnlockService : IDisposable
         }
         session.AutoLocateAttempted = true;
 
-        if (result.Ok && game == GameId.Genshin) QueueLegacyCleanup();
         Raise(forceUi: true);
         return result;
     }
@@ -444,7 +411,6 @@ internal sealed partial class UnlockService : IDisposable
             _config.TrySave(out _);
             session.PathStatus = $"游戏路径: {profile.GamePath}（手动选择）";
             AppLog.Info($"manual game path ({descriptor.Key}): {profile.GamePath}");
-            if (game == GameId.Genshin) QueueLegacyCleanup();
             Raise(forceUi: true);
         }
         return result;
@@ -461,7 +427,6 @@ internal sealed partial class UnlockService : IDisposable
         _config.Profile(game).GamePath = normalized;
         _config.TrySave(out _);
         _sessions[game].PathStatus = $"游戏路径: {normalized}（手动选择）";
-        if (game == GameId.Genshin) QueueLegacyCleanup();
         Raise(forceUi: true);
         return GameLocateResult.Success(normalized, GameLocateSource.Manual);
     }
@@ -490,7 +455,6 @@ internal sealed partial class UnlockService : IDisposable
         }
         session.AutoLocateAttempted = true;
 
-        if (result.Ok && game == GameId.Genshin) QueueLegacyCleanup();
         Raise(forceUi: true);
         return result;
     }
@@ -547,15 +511,6 @@ internal sealed partial class UnlockService : IDisposable
             var path = PathUtil.Normalize(profile.GamePath!);
             // 星穹铁道的帧率来自注册表：启动前先核对一次，游戏读到 120 才会生效。
             if (descriptor.FpsViaRegistry) SyncStarRailRegistry(force: true);
-            // 原神启动会立刻加载目录里的 dxgi.dll / DLSS 组件：先把上一版本的残留
-            // 清掉再拉起游戏，清不掉（被占用）就记成待处理，交给监视循环继续重试。
-            if (game == GameId.Genshin)
-            {
-                if (LegacyProxyCleanup.TryCleanup(path))
-                    Interlocked.Exchange(ref _legacyCleanupPending, 0);
-                else
-                    QueueLegacyCleanup();
-            }
             // 当前宿主已经是管理员时直接 CreateProcess，让子进程继承现有令牌。
             // 一律交给 ShellExecute 会再次经过 Shell 的兼容性/UAC 判断，导致
             // 用户已经授权后点击「启动游戏」仍重复弹窗。普通权限下保留

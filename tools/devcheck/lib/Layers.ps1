@@ -119,6 +119,9 @@ function Test-PackagingProfile {
         if ($expr -match '^"([^"]*)"$') {
             $value = $Matches[1]
         }
+        elseif ($expr -match '^([A-Za-z_]\w*)$') {
+            $value = Get-HostConst $file $Matches[1]
+        }
         elseif ($expr -match '^([A-Za-z_]\w*)\s*\+\s*"([^"]*)"$') {
             $value = (Get-HostConst $file $Matches[1]) + $Matches[2]
         }
@@ -126,13 +129,10 @@ function Test-PackagingProfile {
         $script:HostConstCache[$key] = $value
         return $value
     }
-    $productName = Get-HostConst 'src/Host/AppPaths.cs' 'ProductName'         # 内部注册表键（历史名）
+    $productName = Get-HostConst 'src/Host/AppPaths.cs' 'ProductName'         # 内部产品标识
     $displayName = Get-HostConst 'src/Host/AppPaths.cs' 'ProductDisplayName'  # 用户可见品牌名
     $exeName = Get-HostConst 'src/Host/AppPaths.cs' 'ExecutableFileName'
-    $legacyExe = Get-HostConst 'src/Host/AppPaths.cs' 'LegacyExecutableFileName'
     $uninstName = Get-HostConst 'src/Host/AppPaths.cs' 'UninstallerFileName'
-    $legacyUninst = Get-HostConst 'src/Host/AppPaths.cs' 'LegacyUninstallerFileName'
-    $legacyUpdater = Get-HostConst 'src/Host/AppPaths.cs' 'LegacyUpdaterFileName'
     $taskName = Get-HostConst 'src/Host/Autostart.cs' 'ElevatedTaskName'
 
     $bad = [System.Collections.Generic.List[string]]::new()
@@ -151,12 +151,9 @@ function Test-PackagingProfile {
     Want 'title 与品牌名一致' ($cfg.title -eq $displayName) "$($cfg.title)"
     Want 'uninstallName 与宿主 UninstallerFileName 一致' ($cfg.uninstallName -eq $uninstName) "$($cfg.uninstallName) vs $uninstName"
 
-    # 2) 改名前的兼容识别：旧 exe / 旧卸载器 / 旧安装目录 / 旧更新器
-    Want 'legacyExeNames 含宿主 LegacyExecutableFileName' (HasValue $cfg.legacyExeNames $legacyExe) "$($cfg.legacyExeNames -join ',')"
-    Want 'legacyUninstallNames 含宿主 LegacyUninstallerFileName' (HasValue $cfg.legacyUninstallNames $legacyUninst) "$($cfg.legacyUninstallNames -join ',')"
-    Want 'legacyProgramFilesPaths 含历史安装目录' (HasValue $cfg.legacyProgramFilesPaths $productName) "$($cfg.legacyProgramFilesPaths -join ',')"
-    Want 'extraUninstallPath 覆盖旧更新器' (@($cfg.extraUninstallPath) -contains "`${INSTALL_PATH}/$legacyUpdater") "$($cfg.extraUninstallPath -join ' | ')"
-    Want '内部注册表键继续使用历史名' ($cfg.regName -eq $productName) "$($cfg.regName) vs $productName"
+    # 2) 内部标识与卸载路径使用当前产品名
+    Want 'regName 与宿主 ProductName 一致' ($cfg.regName -eq $productName) "$($cfg.regName) vs $productName"
+    Want 'extraUninstallPath 覆盖当前更新器' (@($cfg.extraUninstallPath) -contains "`${INSTALL_PATH}/$($cfg.updaterName)") "$($cfg.extraUninstallPath -join ' | ')"
 
     # 3) 卸载回收：宿主写的自启动项 / 计划任务 / 快捷方式
     $runEntry = @($cfg.extraUninstallRegistry) | Where-Object {
@@ -164,7 +161,7 @@ function Test-PackagingProfile {
     }
     Want 'extraUninstallRegistry 回收宿主写的 HKCU Run 值' ($runEntry.Count -eq 1) "value=$productName"
     Want 'extraUninstallScheduledTasks 登记宿主那个计划任务名' (HasValue $cfg.extraUninstallScheduledTasks $taskName) "$($cfg.extraUninstallScheduledTasks -join ',') vs $taskName"
-    foreach ($lnk in @("$displayName.lnk", "Uninstall $displayName.lnk", "卸载$displayName.lnk", "$productName.lnk", '原神帧率解锁.lnk')) {
+    foreach ($lnk in @("$displayName.lnk", "Uninstall $displayName.lnk")) {
         Want "extraUninstallLnkNames 覆盖 $lnk" (HasValue $cfg.extraUninstallLnkNames $lnk) "$($cfg.extraUninstallLnkNames -join ',')"
     }
 

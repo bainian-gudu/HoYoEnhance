@@ -173,8 +173,6 @@ internal sealed partial class UiBridge
             _config.LogLevel = lv.GetString() ?? "Debug";
 
         _config.Sanitize();
-        // 导入的配置可能换掉游戏路径：重新核对一次上一版本的残留组件。
-        _service.QueueLegacyCleanup();
         // 导入的配置可能换掉自启开关的组合，同样按唯一入口重新同步，
         // 否则会出现「配置说管理员自启、实际还是旧通道」的错位。
         _service.SyncAutostart();

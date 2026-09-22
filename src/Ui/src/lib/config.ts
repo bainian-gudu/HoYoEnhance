@@ -11,9 +11,8 @@ export const APP_NAME = BRAND_NAME;
 export const THIRD_PARTY_DISCLAIMER =
   '本项目为个人自用的第三方开源工具，代码与文档主要由 AI 生成；与米哈游 / HoYoverse 无关联，' +
   '未获授权或背书。《原神》《崩坏：星穹铁道》及其角色、图标、场景素材版权均归米哈游所有。使用风险自负。';
-/** 配置存储键（v2：每个游戏一份 games[game] 档案）。旧键只用于一次性迁移读取。 */
+/** 配置存储键（每个游戏一份 games[game] 档案）。 */
 export const STORAGE_KEY = 'genshin-fps-unlocker.config.v2';
-export const LEGACY_STORAGE_KEY = 'genshin-fps-unlocker.config.v1';
 
 export type Theme = 'dark' | 'light';
 /** 全部页面 id；顺序即侧栏主导航 + 次级导航的顺序。 */
@@ -343,17 +342,13 @@ export function parseConfig(value: unknown): UnlockerConfig {
       if (profile == null) continue;
       next.games[id] = parseGameProfile(profile, id, next.games[id]);
     }
-  } else {
-    // v1 扁平结构（旧的 config.json、宿主当前下发的 config）：整段按原神档案迁移，
-    // 星穹铁道保持默认值，不会因为读旧配置而被清空。
-    next.games.genshin = parseGameProfile(input, 'genshin', next.games.genshin);
   }
   return next;
 }
 
 export function loadConfig(): { config: UnlockerConfig; recovered: boolean } {
   try {
-    const stored = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEY);
+    const stored = localStorage.getItem(STORAGE_KEY);
     return { config: stored ? parseConfig(JSON.parse(stored)) : createDefaultConfig(), recovered: false };
   } catch {
     return { config: createDefaultConfig(), recovered: true };
