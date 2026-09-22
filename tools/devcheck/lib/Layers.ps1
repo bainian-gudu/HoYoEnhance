@@ -93,6 +93,14 @@ function Test-KiraraBoundary {
     }
     $notes.Add('打包脚本只从 Kirara 取 builder')
 
+    # 5) 便携包和安装器必须继续作为 CI 产物上传；否则会出现“打包成功但用户拿不到”
+    foreach ($artifact in @('artifacts/*.zip', 'artifacts/*.7z', 'artifacts/*.Install.*.exe')) {
+        if ($buildYml -notmatch [regex]::Escape($artifact)) {
+            throw "build.yml 没有上传 $artifact —— 便携包 / 安装器产物不能从发布链路消失"
+        }
+    }
+    $notes.Add('CI 上传安装器与便携包产物')
+
     return ($notes -join '；')
 }
 
@@ -192,6 +200,26 @@ function Test-PackagingProfile {
     Want 'runtimes 含 .NET Desktop Runtime 9' (@($cfg.runtimes) -contains 'Microsoft.DotNet.DesktopRuntime.9') "$($cfg.runtimes -join ',')"
     Want 'runtimes 含 VCRedist' (@($cfg.runtimes) -contains 'Microsoft.VCRedist.2015+.x64') "$($cfg.runtimes -join ',')"
     Want 'uacStrategy 为 prefer-admin' ($cfg.uacStrategy -eq 'prefer-admin') "$($cfg.uacStrategy)"
+
+    # 7) 兼容表面：运行库前置、便携包、数据目录回退都必须仍在接线中
+    $programPath = Join-Path $RepoRoot 'src/Host/Program.cs'
+    $programText = [System.IO.File]::ReadAllText($programPath)
+    Want 'Program 调用 RuntimePrerequisite.EnsureOrPrompt' `
+        ($programText -match 'RuntimePrerequisite\.EnsureOrPrompt\s*\(') `
+        '缺失会导致启动时不检查运行库'
+    $runtimePath = Join-Path $RepoRoot 'src/Host/RuntimePrerequisite.cs'
+    Want 'RuntimePrerequisite.cs 存在' (Test-Path -LiteralPath $runtimePath) "$runtimePath"
+
+    $appPathsText = [System.IO.File]::ReadAllText((Join-Path $RepoRoot 'src/Core/AppPaths.cs'))
+    foreach ($marker in @('Environment.SpecialFolder.LocalApplicationData',
+                          'Environment.SpecialFolder.ApplicationData',
+                          'Environment.SpecialFolder.MyDocuments')) {
+        Want "AppPaths 保留数据目录回退 $marker" ($appPathsText.Contains($marker)) '缺少任一层都会退回单目录行为'
+    }
+
+    $packText = [System.IO.File]::ReadAllText((Join-Path $RepoRoot 'packaging/pack.ps1'))
+    Want 'pack.ps1 仍生成便携 zip' ($packText -match 'Compress-Archive') '便携 zip 分支缺失'
+    Want 'pack.ps1 仍生成便携 7z' ($packText -match '-t7z') '便携 7z 分支缺失'
 
     if ($bad.Count) {
         throw "安装包配置与宿主源码不一致（$($bad.Count) 项）：`n   - " + ($bad -join "`n   - ")

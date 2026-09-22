@@ -125,9 +125,11 @@ $script:SelfTestRepoFiles = @(
     'packaging/pack.ps1',
     'packaging/packaging.config.json',
     'src/Contracts/UiConfigContract.cs',
+    'src/Core/AppPaths.cs',
     'src/Core/HoYoEnhance.Core.csproj',
     'src/Core/ProcessRunner.cs',
-    'src/Core/GameLocator.Helpers.cs'
+    'src/Core/GameLocator.Helpers.cs',
+    'src/Host/Program.cs'
 )
 
 function Clear-RepoMutations {

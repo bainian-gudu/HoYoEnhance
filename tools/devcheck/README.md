@@ -64,12 +64,13 @@ pwsh tools/devcheck/devcheck.ps1 -Layer ui          # 不在 all 里：要先 cd
 
 ## `-SelfTest`：证明这套检查不是空壳
 
-检查工具最大的风险是「跑通了但其实什么都没查」。`-SelfTest` 会注入 12 个错误，逐个确认
+检查工具最大的风险是「跑通了但其实什么都没查」。`-SelfTest` 会注入 16 个错误，逐个确认
 对应层会失败：把 kachina 源码搬回仓库、工作流里加一条 `Invoke-WebRequest`、把打包脚本
 的 `$KiraraRepo` 改名、把 `build.yml` 里的 Kirara Release 仓库改成别家、让 `-BuilderPath`
 不再跳过 Kirara 查找、让 builder 路径不再固化绝对路径、放一个语法错误的 `.ps1`、改坏
-`packaging.config.json` 的 `exeName`、拿掉 `ProcessRunner` 超时路径的 `KillTree`、
-删掉 `GameLocator` 剪枝表里的系统目录行、改了 C# DTO 但不重新生成 TypeScript 契约。
+`packaging.config.json` 的 `exeName`、删掉数据目录回退、拿掉便携 zip 分支、断开运行库
+前置检查、删掉便携包上传路径、拿掉 `ProcessRunner` 超时路径的 `KillTree`、删掉
+`GameLocator` 剪枝表里的系统目录行、改了 C# DTO 但不重新生成 TypeScript 契约。
 
 自检会临时改写**仓库里的真实文件**，因此有两个保护：
 

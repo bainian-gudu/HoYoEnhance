@@ -85,6 +85,18 @@ jobs:
         -Run { Test-KiraraBoundary } `
         -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $packScript) -Path $packScript }
 
+    # --- 3e) vendor：build.yml 不再上传便携包就必须报错 ---
+    Add-Case 'vendor 层能抓到便携包不再上传' `
+        -Mutate {
+            $text = [System.IO.File]::ReadAllText($buildYml)
+            $normalized = $text.Replace("`r`n", "`n")
+            $broken = $normalized.Replace("            artifacts/*.7z`n", '')
+            if ($broken -eq $normalized) { throw '注入失败：build.yml 里没有 artifacts/*.7z 上传路径' }
+            [System.IO.File]::WriteAllText($buildYml, $broken)
+        } `
+        -Run { Test-KiraraBoundary } `
+        -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $buildYml) -Path $buildYml }
+
     # --- 4) ps1：临时放一个语法错误的 .ps1 进仓库 ---
     Add-Case 'ps1 层能抓到 PowerShell 语法错误' `
         -Mutate {
@@ -104,6 +116,43 @@ jobs:
         } `
         -Run { Test-PackagingProfile } `
         -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $profile) -Path $profile }
+
+    # --- 5b) packaging：数据目录回退链被删就必须报错 ---
+    $appPaths = Join-Path $RepoRoot 'src/Core/AppPaths.cs'
+    Add-Case 'packaging 层能抓到数据目录回退被删' `
+        -Mutate {
+            $text = [System.IO.File]::ReadAllText($appPaths)
+            $broken = $text.Replace('Environment.SpecialFolder.ApplicationData', 'Environment.SpecialFolder.UserProfile')
+            if ($broken -eq $text) { throw '注入失败：AppPaths.cs 里没有 Roaming AppData 回退' }
+            [System.IO.File]::WriteAllText($appPaths, $broken)
+        } `
+        -Run { Test-PackagingProfile } `
+        -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $appPaths) -Path $appPaths }
+
+    # --- 5c) packaging：便携 zip 分支被删就必须报错 ---
+    Add-Case 'packaging 层能抓到便携 zip 分支被删' `
+        -Mutate {
+            $text = [System.IO.File]::ReadAllText($packScript)
+            $needle = 'Compress-Archive -Path $PortableDir -DestinationPath $zip -Force'
+            $broken = $text.Replace($needle, '# portable zip disabled')
+            if ($broken -eq $text) { throw '注入失败：pack.ps1 里没有 Compress-Archive 便携 zip 分支' }
+            [System.IO.File]::WriteAllText($packScript, $broken)
+        } `
+        -Run { Test-PackagingProfile } `
+        -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $packScript) -Path $packScript }
+
+    # --- 5d) packaging：运行库前置检查没有接线就必须报错 ---
+    $program = Join-Path $RepoRoot 'src/Host/Program.cs'
+    Add-Case 'packaging 层能抓到运行库前置未接线' `
+        -Mutate {
+            $text = [System.IO.File]::ReadAllText($program)
+            $needle = 'RuntimePrerequisite.EnsureOrPrompt(quiet || isAutostart)'
+            $broken = $text.Replace($needle, 'true')
+            if ($broken -eq $text) { throw '注入失败：Program.cs 里没有 RuntimePrerequisite 调用' }
+            [System.IO.File]::WriteAllText($program, $broken)
+        } `
+        -Run { Test-PackagingProfile } `
+        -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $program) -Path $program }
 
     # --- 6) hosttest：把 ProcessRunner 超时路径上的 KillTree 拿掉 ---
     #      只注入一个能编过的行为错误（少杀进程树，而不是改标记或提前 return，
