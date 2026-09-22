@@ -42,7 +42,7 @@
 ## 一、现状：缺这个模块会发生什么
 
 - 宿主 `GameCatalog.StarRail.StubFileName = "StarRailStub.dll"`，只有在星铁档案里
-  开启了画面效果（反角色虚化 / 隐藏 UID 水印）时才会去注入，并且注入前做可信度校验
+  开启了画面效果（反角色虚化 / 隐藏 UID）时才会去注入，并且注入前做可信度校验
   （`ModuleTrust`）。
 - DLL 不在 exe 旁时：状态栏显示「缺少 StarRailStub.dll（应位于 …）」，**不注入任何东西**，
   游戏进程保持干净。
@@ -94,7 +94,7 @@
    也不调用无关函数。
 3. 两条路都失败 → `Error`，卸载并退出工作线程。
 
-## 五、功能 1：隐藏 UID 水印（建议先做，风险最低）
+## 五、功能 1：隐藏 UID（建议先做，风险最低）
 
 - 目标节点（**就这 2 条，按 2 条处理**）：
   - `/UIRoot/AboveDialog/BetaHintDialog(Clone)/Contents/VersionText`
@@ -152,7 +152,7 @@ public class BaseShaderPropertyTransition : UnityEngine.MonoBehaviour {
 ## 七、验证清单（需要 Windows + 星铁）
 
 1. 不放 DLL：宿主状态栏显示「缺少 StarRailStub.dll」，游戏内无任何变化。
-2. 放好 DLL + 只开「隐藏 UID 水印」：水印消失，关闭开关能恢复；游戏退出后 DLL 不在进程里。
+2. 放好 DLL + 只开「隐藏 UID」：水印消失，关闭开关能恢复；游戏退出后 DLL 不在进程里。
 3. 只开「反角色虚化」：镜头拉近角色不再透明化；切场景后仍有效。
 4. 版本更新后再跑：定位失败要变成 `Error` 而不是崩游戏（宿主会显示错误码并按退避重试）。
 5. 全程不修改游戏目录里的任何文件（只读 + 内存操作）。
@@ -223,7 +223,7 @@ dotnet run -c Release --no-build <game-view-dir>
 | `unity-log-tail.txt` | 确认 Unity 日志目录与 Unity 版本 |
 | `info.txt` | 各文件版本 / 大小 / SHA256，用于判断适配的目标版本 |
 
-实现顺序（已完成）：按第四节把 RVA / 特征码定位打通 → 隐藏 UID 水印 →
+实现顺序（已完成）：按第四节把 RVA / 特征码定位打通 → 隐藏 UID →
 反角色虚化 → 按第七节清单在 Windows 上验收。
 
 在那之前，「模块缺失即不注入」就是最稳的状态：帧率解锁照常可用，画面效果保持未就绪提示。

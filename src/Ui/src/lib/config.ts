@@ -120,8 +120,8 @@ export const GAME_META: Record<GameId, GameMeta> = {
     injection: {
       module: 'StarRailStub.dll',
       features: [
-        { key: 'antiBlurPerspective', title: '反角色虚化', description: '开启后镜头拉近时，角色不再透明化' },
-        { key: 'hideUid', title: '隐藏 UID 水印', description: '隐藏星穹铁道界面上的 UID 水印文本' },
+        { key: 'antiBlurPerspective', title: '反角色虚化', description: '开启后镜头拉近时，角色不再透明化（虚化效果被跳过）' },
+        { key: 'hideUid', title: '隐藏 UID', description: '隐藏游戏水印与资料页上的 UID 文本' },
       ],
     },
   },

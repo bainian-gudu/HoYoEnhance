@@ -315,14 +315,13 @@ internal sealed partial class MainForm
                 if (_trayAutoWatchItem is not null)
                     _trayAutoWatchItem.Checked = _config.AutoWatch;
 
-                // 画面效果项：星穹铁道没有「水下马赛克」，反虚化显示名两款游戏统一。
+                // 画面效果项：星穹铁道没有「水下马赛克」；反虚化与隐藏 UID 的
+                // 显示名 / 悬停说明两款游戏统一。
                 if (_trayAntiBlurPerspectiveItem is not null)
                 {
                     _trayAntiBlurPerspectiveItem.Checked = profile.AntiBlurPerspective;
                     _trayAntiBlurPerspectiveItem.Text = "反角色虚化";
-                    _trayAntiBlurPerspectiveItem.ToolTipText = descriptor.SupportsDiveMosaic
-                        ? "镜头拉近时角色不再透明化（仅供单机体验）"
-                        : "镜头拉近时角色不再透明化（由 StarRailStub.dll 提供）";
+                    _trayAntiBlurPerspectiveItem.ToolTipText = "镜头拉近时角色不再透明化（仅供单机体验）";
                 }
                 if (_trayAntiBlurDiveMosaicItem is not null)
                 {
@@ -332,10 +331,8 @@ internal sealed partial class MainForm
                 if (_trayHideUidItem is not null)
                 {
                     _trayHideUidItem.Checked = profile.HideUid;
-                    _trayHideUidItem.Text = descriptor.SupportsDiveMosaic ? "隐藏 UID" : "隐藏 UID 水印";
-                    _trayHideUidItem.ToolTipText = descriptor.SupportsDiveMosaic
-                        ? "隐藏水印与资料页上的 UID 文本（仅供单机体验）"
-                        : "隐藏星穹铁道界面上的 UID 水印文本（仅供单机体验）";
+                    _trayHideUidItem.Text = "隐藏 UID";
+                    _trayHideUidItem.ToolTipText = "隐藏水印与资料页上的 UID 文本（仅供单机体验）";
                 }
 
                 if (_trayFpsRoot is not null)

@@ -122,7 +122,7 @@ internal sealed partial class MainForm
 
         // —— 画面效果注入组（随游戏进程即时生效；联机/UGC 玩法勿开）——
         _trayHideUidItem = MakeCheckItem(
-            ActiveGameDescriptor.SupportsDiveMosaic ? "隐藏 UID" : "隐藏 UID 水印",
+            "隐藏 UID",
             ActiveGameProfile.HideUid,
             "隐藏水印与资料页上的 UID 文本（仅供单机体验）");
         _trayHideUidItem.CheckedChanged += (_, _) =>
