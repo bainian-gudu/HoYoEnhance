@@ -220,3 +220,86 @@ jobs:
             artifacts/*.Install.*.exe
           if-no-files-found: error
           retention-days: 30
+
+      # 给 package-e2e 的离线更新用例准备一个版本号更高的同应用安装包。
+      # 只加一个测试标记文件，不改发布目录里的正式产物。
+      - name: Pack update fixture
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $baseVersion = "${{ steps.ver.outputs.version }}"
+          $parts = $baseVersion.Split('.')
+          $last = 0
+          if ($parts.Count -lt 2 -or -not [int]::TryParse($parts[-1], [ref]$last)) {
+            throw "无法从版本号 $baseVersion 生成 CI 更新版本"
+          }
+          $parts[-1] = "$($last + 1)"
+          $updateVersion = $parts -join '.'
+          $fixtureDist = "dist-ci-update"
+          if (Test-Path -LiteralPath $fixtureDist) {
+            Remove-Item -LiteralPath $fixtureDist -Recurse -Force
+          }
+          Copy-Item -LiteralPath "dist" -Destination $fixtureDist -Recurse -Force
+          Set-Content -LiteralPath (Join-Path $fixtureDist "ci-update-marker.txt") `
+            -Value "v2" -Encoding utf8
+          & .\packaging\pack.ps1 `
+            -DistDir $fixtureDist `
+            -OutDir "artifacts/ci-update" `
+            -BuilderPath "packaging\tools\kirara-builder.exe" `
+            -Version $updateVersion
+          Get-ChildItem -LiteralPath "artifacts/ci-update" |
+            Format-Table Name, Length
+
+      - name: Upload update fixture
+        uses: actions/upload-artifact@v6
+        with:
+          name: package-e2e-update
+          path: artifacts/ci-update/*.Install.*.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  # HoYoEnhance 自己的安装包级行为测试：拿刚打出来的真实安装包，在 Windows
+  # runner 上真装、真升、真卸。Kirara 的 builder 内部矩阵仍在 Kirara 仓库跑。
+  package-e2e:
+    name: Package E2E (${{ matrix.test }})
+    needs: [pack]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        test:
+          - offline-install
+          - uninstall
+          - already-latest
+          - offline-update
+          - portable-smoke
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Download current package artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: HoYoEnhance-win-x64
+          path: artifacts/current
+
+      - name: Download update fixture
+        uses: actions/download-artifact@v7
+        with:
+          name: package-e2e-update
+          path: artifacts/update
+
+      - name: Run ${{ matrix.test }}
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          pwsh -NoProfile -File tools/ci/package-e2e.ps1 `
+            -Test "${{ matrix.test }}" `
+            -CurrentArtifacts "artifacts/current" `
+            -UpdateArtifacts "artifacts/update"

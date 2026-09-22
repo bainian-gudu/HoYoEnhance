@@ -245,7 +245,7 @@ pwsh tools/devcheck/devcheck.ps1 -SelfTest       # 注入错误，确认每层�
 | 工作流 | 触发 | 内容 | 耗时 |
 | --- | --- | --- | --- |
 | **Devcheck**（`.github/workflows/devcheck.yml`） | push 到 main / PR / 手动，**自动执行** | `tools/devcheck` 全部检查层 + 自检 + Web UI 构建，ubuntu 与 windows 双 runner | 几分钟 |
-| **Build**（`.github/workflows/build.yml`） | **仅手动**（Actions → Build → Run workflow） | 下载 Kirara 最新 Release 的 `kirara-builder` → 应用本体 → 打包安装器 | 几分钟起 |
+| **Build**（`.github/workflows/build.yml`） | **仅手动**（Actions → Build → Run workflow） | 下载 Kirara 最新 Release 的 `kirara-builder` → 应用本体 → 打包安装器 → Windows 安装 / 更新 / 卸载 / 便携包 E2E | 几分钟起 |
 
 CI 的安装器工具链**只从独立项目 Kirara 的最新 Release 下载** `kirara-builder.exe`
 （Kirara 自己的发布流程负责从源码构建并挂出产物）；本仓库 CI 不再检出 Kirara 源码、
@@ -254,9 +254,11 @@ CI 的安装器工具链**只从独立项目 Kirara 的最新 Release 下载** `
 [`tools/devcheck/README.md`](tools/devcheck/README.md)。
 
 **Build** 依次跑 `build-builder`（下载 Kirara 最新 Release 的 `kirara-builder.exe`）→
-`build-app` → `pack`，可选 `host_mode=self-contained` 打全量自包含主程序；产物与本地
-构建一致，挂在 Release 上。把 `Install` 包发布到 Release 且 tag 为 `v{version}` 后，
-配置里的 GitHub 在线源即可用于更新器。
+`build-app` → `pack` → `package-e2e`，可选 `host_mode=self-contained` 打全量自包含
+主程序；`package-e2e` 会拿刚打出的真实安装包在 Windows runner 上验证离线安装、重复
+安装、离线更新、卸载保留用户数据和便携包诊断启动。产物与本地构建一致，挂在 Release
+上。把 `Install` 包发布到 Release 且 tag 为 `v{version}` 后，配置里的 GitHub 在线源
+即可用于更新器。
 
 ## 隐私与遥测
 

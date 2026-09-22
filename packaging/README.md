@@ -276,7 +276,7 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 两个工作流：**Devcheck**（`devcheck.yml`，push/PR 自动执行，跑 `tools/devcheck` 的
 全部检查层 + 自检 + Web UI 构建，几分钟）与 **Build**（`build.yml`，仅手动触发，出安装包）。
 
-`build.yml` 三个 job：
+`build.yml` 四个 job：
 
 1. `build-builder` —— 用 `gh release download` 下载独立项目 Kirara 最新 Release 的
    `kirara-builder.exe`（Kirara 自己的发布流程负责从源码构建），本仓库 CI 不再检出
@@ -286,6 +286,9 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 3. `pack` —— 下载前两者的产物，执行
    `packaging\pack.ps1 -BuilderPath packaging\tools\kirara-builder.exe`；给了
    `-BuilderPath` 就不再查找 Kirara 目录（CI 里没有 Kirara 检出）。
+4. `package-e2e` —— 拿 `pack` 产物在 Windows runner 上真装、真升、真卸，并解压便携包
+   跑一次诊断启动；矩阵为 `offline-install`、`already-latest`、`offline-update`、
+   `uninstall`、`portable-smoke`。
 
 **安装器工具链只来自 Kirara 官方发布的最新 Release 产物**：本仓库不内嵌 kachina 源码、
 不是 submodule；工作流与打包脚本除 `gh release download --repo bainian-gudu/Kirara`
