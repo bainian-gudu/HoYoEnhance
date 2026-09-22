@@ -35,6 +35,12 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Root
 
+# Web UI 的桥接类型由 C# DTO 生成。打包前先确认生成物没落后，避免 Host 与 UI
+# 各自编译成功、但 JSON 字段契约已经错位。
+$contractGen = Join-Path $Root "tools/contract-gen/HoYoEnhance.ContractGen.csproj"
+& dotnet run --project $contractGen --no-launch-profile -- --check --out (Join-Path $Root "src/Ui/src/lib/bridge.generated.ts")
+if ($LASTEXITCODE -ne 0) { throw "C# DTO 与 TypeScript 桥接契约不一致" }
+
 $hostSelfContained = [bool]$SelfContained
 $hostLabel = if ($hostSelfContained) { "self-contained" } else { "framework-dependent" }
 Write-Host "==> Host publish mode: $hostLabel" -ForegroundColor Cyan

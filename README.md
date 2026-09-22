@@ -51,7 +51,8 @@
 
 | 部分 | 技术 | 位置与说明 |
 | --- | --- | --- |
-| 宿主主程序 | C# / .NET 9（`net9.0-windows10.0.17763.0`）/ WinForms | `src/Host/`：WebView2 承载 Web UI、系统托盘、自绘标题栏、注入调度、游戏定位、配置与日志 |
+| 宿主主程序 | C# / .NET 9（`net9.0-windows10.0.18362.0`）/ WinForms | `src/Host/`：WebView2、托盘、窗口与 UI 外壳；`src/Core/`：配置、定位、解锁、IPC、注册表与注入调度 |
+| WebView2 契约 | C# DTO → TypeScript 生成 | `src/Contracts/` 是桥接配置的唯一事实来源；`tools/contract-gen/` 生成 `src/Ui/src/lib/bridge.generated.ts`，devcheck 强制两端同步 |
 | Web UI | React 19 + TypeScript 5.9 + Vite 7 + Tailwind CSS 4 + framer-motion + lucide-react | `src/Ui/`：设计稿由 **gpt-6-astra-max** 设计、按稿 1:1 实现；`vite-plugin-singlefile` 打成单文件 `ui/index.html` |
 | 注入模块 | C++20（CMake）+ MinHook（BSD-2-Clause），CRT 静态链接（`/MT`） | `src/Stub/`：原神的帧率解锁与反虚化；`src/StubStarRail/`：星铁的反角色虚化与隐藏 UID（`StarRailStub.dll`，帧率仍走注册表）；两者只共用 `src/Common/` 的扫描器与 IPC 协议，业务代码相互独立 |
 | 安装 / 卸载 / 更新器 | Kachina：Rust + Tauri 2（nightly + `-Z build-std`）+ Vue 3.5 + Rsbuild | 独立项目 [Kirara](https://github.com/bainian-gudu/Kirara)：上游源码快照（tag `0.5.1`）+ 本地修改，产出 `kirara-builder.exe`；本仓库 CI 直接取它的最新 Release 产物 |
@@ -120,7 +121,7 @@ artifacts\HoYoEnhance_v<版本>.7z                      # 便携 7z（本机有 
 
 ```powershell
 pwsh tools/devcheck/devcheck.ps1                 # all
-pwsh tools/devcheck/devcheck.ps1 -Layer rust,logic
+pwsh tools/devcheck/devcheck.ps1 -Layer host,contract
 pwsh tools/devcheck/devcheck.ps1 -SelfTest       # 注入错误，确认每层真的会报错
 ```
 

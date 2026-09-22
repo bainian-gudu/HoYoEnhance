@@ -3,16 +3,6 @@ using System.Text;
 
 namespace GenshinFpsUnlocker.Host;
 
-/// <summary>日志级别（数值越大越严重）。</summary>
-internal enum LogLevel
-{
-    Trace = 0,
-    Debug = 1,
-    Info = 2,
-    Warn = 3,
-    Error = 4,
-}
-
 /// <summary>
 /// 缓冲型文件日志。默认开启 Debug。
 /// 路径：用户数据目录\logs\app-yyyyMMdd.log（跨日自动换文件）

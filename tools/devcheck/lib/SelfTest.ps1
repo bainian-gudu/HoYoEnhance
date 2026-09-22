@@ -150,6 +150,19 @@ jobs:
         -Run { Test-Host } `
         -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $coreProject) -Path $coreProject }
 
+    # --- 9) contract：C# DTO 改了但 TypeScript 契约没有重新生成就必须报错 ---
+    $contractSource = Join-Path $RepoRoot 'src/Contracts/UiConfigContract.cs'
+    Add-Case 'contract 层能抓到 C# DTO 改了但 TS 没重新生成' `
+        -Mutate {
+            $text = [System.IO.File]::ReadAllText($contractSource)
+            $needle = '    public int TargetFps { get; init; } = 120;'
+            $broken = $text.Replace($needle, $needle + "`n    public string? ContractSelfTest { get; init; }")
+            if ($broken -eq $text) { throw '注入失败：没找到 GameProfileDto.TargetFps' }
+            [System.IO.File]::WriteAllText($contractSource, $broken)
+        } `
+        -Run { Test-Contracts } `
+        -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $contractSource) -Path $contractSource }
+
     # 先按磁盘备份清掉上一次被中断的自检留下的注入，再上锁独占。
     Clear-RepoMutations
     $caught = 0; $missed = 0; $skipped = 0

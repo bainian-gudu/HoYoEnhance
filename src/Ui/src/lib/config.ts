@@ -1,3 +1,7 @@
+import type { GameId, GameProfile, LogLevel, UnlockerConfig } from './bridge.generated';
+
+export type { GameId, GameProfile, LogLevel, UnlockerConfig } from './bridge.generated';
+
 export const PROJECT_URL = 'https://github.com/bainian-gudu/HoYoEnhance';
 /**
  * 应用名称：品牌区、窗口标题、关于页与安全声明共用这几个常量，改名只动这里。
@@ -18,11 +22,9 @@ export type Theme = 'dark' | 'light';
 /** 全部页面 id；顺序即侧栏主导航 + 次级导航的顺序。 */
 export const PAGES = ['overview', 'settings', 'logs', 'guide', 'about'] as const;
 export type Page = (typeof PAGES)[number];
-export type LogLevel = 'Info' | 'Warn' | 'Error' | 'Debug' | 'Trace';
 
 /** 支持的游戏：原神与崩坏：星穹铁道，各自持有一份互不影响的配置。 */
-export const GAME_IDS = ['genshin', 'starRail'] as const;
-export type GameId = (typeof GAME_IDS)[number];
+export const GAME_IDS = ['genshin', 'starRail'] as const satisfies readonly GameId[];
 
 /** 画面效果对应的配置键：每个游戏只列出自己注入模块里真实存在的那几项。 */
 export type GameFeatureKey = 'hideUid' | 'antiBlurPerspective' | 'antiBlurDiveMosaic';
@@ -126,39 +128,7 @@ export const GAME_META: Record<GameId, GameMeta> = {
   },
 };
 
-/** 某个游戏单独保存的配置项。 */
-export interface GameProfile {
-  targetFps: number;
-  enabled: boolean;
-  hideUid: boolean;
-  antiBlurPerspective: boolean;
-  antiBlurDiveMosaic: boolean;
-  /** 该游戏主程序的完整 Windows 路径。 */
-  gamePath: string | null;
-}
-
 export type UpdateGameConfig = <K extends keyof GameProfile>(key: K, value: GameProfile[K]) => void;
-
-export interface UnlockerConfig {
-  /** 当前正在配置的游戏：概览 / 设置 / 使用指南三页跟着它切换。 */
-  activeGame: GameId;
-  /** 每个游戏一份的独立配置。 */
-  games: Record<GameId, GameProfile>;
-  /** 以下为两个游戏共用的解锁器级设置。 */
-  masterEnabled: boolean;
-  autoWatch: boolean;
-  startMinimized: boolean;
-  autoStartWithWindows: boolean;
-  autoStartAsAdministrator: boolean;
-  pollIntervalMs: number;
-  safetyNoticeAcknowledged: boolean;
-  showSafetyNoticeOnStartup: boolean;
-  defenderExclusionApplied: boolean;
-  debugLogging: boolean;
-  logLevel: LogLevel;
-  logRetainDays: number;
-  suppressAdminHint: boolean;
-}
 
 export type UpdateConfig = <K extends keyof UnlockerConfig>(key: K, value: UnlockerConfig[K]) => void;
 

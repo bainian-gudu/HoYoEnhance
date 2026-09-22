@@ -6,7 +6,7 @@ Kirara 的 `tools/devcheck` 里，本仓库不再持有那份源码。
 
 ```powershell
 # 仓库根目录
-pwsh tools/devcheck/devcheck.ps1                    # all：vendor ps1 packaging host hosttest ci
+pwsh tools/devcheck/devcheck.ps1                    # all：vendor ps1 packaging host contract hosttest ci
 pwsh tools/devcheck/devcheck.ps1 -Layer host,hosttest
 pwsh tools/devcheck/devcheck.ps1 -SelfTest          # 自检：注入错误，确认每层都会报错
 pwsh tools/devcheck/devcheck.ps1 -Layer ui          # 不在 all 里：要先 cd src/Ui && npm install
@@ -24,6 +24,7 @@ pwsh tools/devcheck/devcheck.ps1 -Layer ui          # 不在 all 里：要先 cd
 | `ps1` | 仓库里全部 `.ps1` 的语法（PowerShell Parser） | pwsh 7 | <0.1s |
 | `packaging` | **打包配置与宿主源码的接线**：`packaging/packaging.config.json` 的品牌名 / 旧品牌兼容名 / 卸载时要回收的注册表值、计划任务、快捷方式、用户数据目录、协议正文、更新源，逐项与 `src/Host` 里的常量交叉断言 | pwsh 7 | ~0.1s |
 | `host` | `src/Host` 的 `dotnet build -c Release -p:EnableWindowsTargeting=true` | .NET 9 SDK | ~2–8s |
+| `contract` | `src/Contracts` 的 C# DTO → `src/Ui/src/lib/bridge.generated.ts` 生成一致性；改了 DTO 不重新生成 TS 会失败 | .NET 9 SDK | ~2–5s |
 | `hosttest` | Host 的**行为断言**（自包含测试台，不依赖 xunit/MSTest）：`ProcessRunner` 的正常退出 / 非 0 退出码 / 超时杀进程树 / 启动失败 / 双管道并发读 / **孙进程继承管道写端时不干等**；`GameLocator` 的自定义目录快扫命中、系统目录与 installer 剪枝、`_Data` 在上一层的布局、同名假 exe 排除、主程序名判定、快捷方式目标反推；`WindowLocationState` 的窗口位置落盘判据（先把新位置写进内存配置也不能因此跳过落盘）。Linux/macOS 只验证测试台能编译，断言在 windows-latest 上真跑 | .NET 9 SDK | 首次 ~8s，之后 ~4s |
 | `ui` | `src/Ui` 的 `vite build`（**不在 `all` 里**，要先 `cd src/Ui && npm install`） | node + npm | 视机器 |
 | `ci` | 工作流里的 action 版本不低于本文登记的**版本下限**；`all` 集合的每一层在 `devcheck.yml` 里都有步骤真跑 | pwsh 7 | ~1s |
@@ -63,12 +64,12 @@ pwsh tools/devcheck/devcheck.ps1 -Layer ui          # 不在 all 里：要先 cd
 
 ## `-SelfTest`：证明这套检查不是空壳
 
-检查工具最大的风险是「跑通了但其实什么都没查」。`-SelfTest` 会注入 11 个错误，逐个确认
+检查工具最大的风险是「跑通了但其实什么都没查」。`-SelfTest` 会注入 12 个错误，逐个确认
 对应层会失败：把 kachina 源码搬回仓库、工作流里加一条 `Invoke-WebRequest`、把打包脚本
 的 `$KiraraRepo` 改名、把 `build.yml` 里的 Kirara Release 仓库改成别家、让 `-BuilderPath`
 不再跳过 Kirara 查找、让 builder 路径不再固化绝对路径、放一个语法错误的 `.ps1`、改坏
 `packaging.config.json` 的 `exeName`、拿掉 `ProcessRunner` 超时路径的 `KillTree`、
-删掉 `GameLocator` 剪枝表里的系统目录行。
+删掉 `GameLocator` 剪枝表里的系统目录行、改了 C# DTO 但不重新生成 TypeScript 契约。
 
 自检会临时改写**仓库里的真实文件**，因此有两个保护：
 

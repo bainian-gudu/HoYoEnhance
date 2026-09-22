@@ -1,12 +1,5 @@
 namespace GenshinFpsUnlocker.Host;
 
-/// <summary>受支持的游戏。两个游戏各自持有独立配置，互不共享。</summary>
-internal enum GameId
-{
-    Genshin,
-    StarRail,
-}
-
 /// <summary>
 /// 一款游戏的静态描述：进程名、主程序名、注入模块、定位线索与帧率解锁方式。
 /// 定位流水线（<see cref="GameLocator"/>）按这里的字段跑同一套逻辑，

@@ -14,6 +14,7 @@
              注册表值、计划任务、快捷方式、用户数据目录、协议正文、更新源
       host   src/Host 的 dotnet build（Release，EnableWindowsTargeting）。只证明它编得过，
              不证明它算得对。
+      contract C# DTO → TypeScript 桥接类型的生成一致性：DTO 改了但 TS 没重生成就失败。
       hosttest Host 行为断言（ProcessRunner：退出码 / 超时 / 管道排空上限；
              GameLocator：自定义目录快扫、目录剪枝、快捷方式目标反推）。
              自包含测试台，不依赖 xunit；非 Windows 上只做编译验证后 SKIP。
@@ -42,8 +43,8 @@ param(
     [switch]$SkipInstall,
 
     # 自检：故意注入错误，确认每一层真的会报错。
-    # 只改 tools/devcheck 下的临时文件与 src/Host 里两个文件
-    # （ProcessRunner.cs、GameLocator.Helpers.cs）。
+    # 只改 tools/devcheck 下的临时文件与少量源码文件
+    # （ProcessRunner.cs、GameLocator.Helpers.cs、UiConfigContract.cs）。
     # 自检持有仓库改动锁，并在磁盘上留备份：中断后下次运行会先恢复再开工。
     [switch]$SelfTest
 )
@@ -85,13 +86,13 @@ if ($SelfTest) {
     exit 0
 }
 
-$validLayers = @('all', 'vendor', 'ps1', 'packaging', 'host', 'hosttest', 'ui', 'ci')
+$validLayers = @('all', 'vendor', 'ps1', 'packaging', 'host', 'contract', 'hosttest', 'ui', 'ci')
 $requested = @($Layer -split '[,\s]+' | Where-Object { $_ })
 if (-not $requested.Count) { $requested = @('all') }
 foreach ($r in $requested) {
     if ($validLayers -notcontains $r) { throw "未知的层 '$r'，可选: $($validLayers -join ', ')" }
 }
-$wanted = if ($requested -contains 'all') { @('vendor', 'ps1', 'packaging', 'host', 'hosttest', 'ci') } else { $requested }
+$wanted = if ($requested -contains 'all') { @('vendor', 'ps1', 'packaging', 'host', 'contract', 'hosttest', 'ci') } else { $requested }
 
 Write-Host ''
 Write-Host "devcheck — 仓库根 $RepoRoot" -ForegroundColor White
@@ -104,6 +105,7 @@ foreach ($l in $wanted) {
         'ps1'   { Invoke-Layer 'ps1   PowerShell 脚本语法'    { Test-Ps1Syntax } }
         'packaging' { Invoke-Layer 'packaging 安装包配置接线' { Test-PackagingProfile } }
         'host'  { Invoke-Layer 'host  .NET Host 构建'         { Test-Host } }
+        'contract' { Invoke-Layer 'contract C# DTO → TS 契约' { Test-Contracts } }
         'hosttest' { Invoke-Layer 'hosttest Host 行为断言'   { Test-HostTest } }
         'ui'    { Invoke-Layer 'ui    Web UI 构建'            { Test-Ui } }
         'ci'    { Invoke-Layer 'ci    CI 脚本行为'            { Test-CiScripts } }

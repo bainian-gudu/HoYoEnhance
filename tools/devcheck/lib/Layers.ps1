@@ -246,6 +246,19 @@ function Test-Host {
     return 'Host/Core 构建通过，Core 无 WinForms / WebView2 依赖'
 }
 
+function Test-Contracts {
+    $dotnet = Get-Tool 'dotnet'
+    if (-not $dotnet) { Skip-Layer 'dotnet 不在 PATH（.NET 9 SDK）' }
+    $proj = Join-Path $RepoRoot 'tools/contract-gen/HoYoEnhance.ContractGen.csproj'
+    if (-not (Test-Path -LiteralPath $proj)) { throw "找不到 $proj" }
+    $out = Join-Path $RepoRoot 'src/Ui/src/lib/bridge.generated.ts'
+    $r = Invoke-Native -FilePath $dotnet `
+        -Arguments @('run', '--project', $proj, '--no-launch-profile', '--', '--check', '--out', $out) `
+        -WorkingDirectory $RepoRoot -Tail 30
+    if ($r.ExitCode -ne 0) { throw 'C# DTO 与 TypeScript 契约不一致' }
+    return 'C# DTO 与 TypeScript 契约一致'
+}
+
 function Test-HostTest {
     $dotnet = Get-Tool 'dotnet'
     if (-not $dotnet) { Skip-Layer 'dotnet 不在 PATH（.NET 9 SDK）' }

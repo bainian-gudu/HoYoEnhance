@@ -16,6 +16,9 @@
     <PackageReference Include="System.Security.Principal.Windows" Version="5.0.0" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Contracts\HoYoEnhance.Contracts.csproj" />
+  </ItemGroup>
+  <ItemGroup>
     <InternalsVisibleTo Include="HoYoEnhance" />
     <InternalsVisibleTo Include="GenshinFpsUnlocker.Host.Tests" />
   </ItemGroup>

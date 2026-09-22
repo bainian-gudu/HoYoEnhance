@@ -15,6 +15,7 @@ internal static class Program
         RunningSessionTrackerTests.Run(harness);
         AutostartTests.Run(harness);
         ConfigExportTests.Run(harness);
+        ConfigContractTests.Run(harness);
         return harness.Report();
     }
 }

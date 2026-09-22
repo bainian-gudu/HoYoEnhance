@@ -109,6 +109,9 @@ function Restore-RepoFile {
     param([Parameter(Mandatory)][string]$Backup, [Parameter(Mandatory)][string]$Path)
     if (Test-Path -LiteralPath $Backup) {
         Copy-Item -LiteralPath $Backup -Destination $Path -Force
+        # Copy-Item 可能保留旧时间戳；MSBuild 会因此继续使用注入版本编译出的 DLL。
+        # 还原后必须让源文件比输出新，后续增量构建才会重新编译。
+        (Get-Item -LiteralPath $Path).LastWriteTimeUtc = [DateTime]::UtcNow
     }
     else {
         Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
@@ -121,6 +124,7 @@ $script:SelfTestRepoFiles = @(
     '.github/workflows/build.yml',
     'packaging/pack.ps1',
     'packaging/packaging.config.json',
+    'src/Contracts/UiConfigContract.cs',
     'src/Core/HoYoEnhance.Core.csproj',
     'src/Core/ProcessRunner.cs',
     'src/Core/GameLocator.Helpers.cs'

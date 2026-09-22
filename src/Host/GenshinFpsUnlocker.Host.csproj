@@ -39,6 +39,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Core\HoYoEnhance.Core.csproj" />
+    <ProjectReference Include="..\Contracts\HoYoEnhance.Contracts.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Win32.SystemEvents" Version="9.0.0" />

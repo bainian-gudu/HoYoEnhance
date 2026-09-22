@@ -250,42 +250,42 @@ internal sealed partial class UiBridge
         Interlocked.Exchange(ref _saveState, 0);
     }
 
-    /// <summary>单个游戏的配置 DTO（键名与前端 GameProfile 一致）。</summary>
-    private object BuildGameProfileDto(GameId game)
+    /// <summary>单个游戏的配置 DTO（字段来自 HoYoEnhance.Contracts）。</summary>
+    private GameProfileDto BuildGameProfileDto(GameId game)
     {
         var profile = _config.Profile(game);
-        return new
+        return new GameProfileDto
         {
-            targetFps = profile.TargetFps,
-            enabled = profile.Enabled,
-            antiBlurPerspective = profile.AntiBlurPerspective,
-            antiBlurDiveMosaic = profile.AntiBlurDiveMosaic,
-            hideUid = profile.HideUid,
-            gamePath = profile.GamePath,
+            TargetFps = profile.TargetFps,
+            Enabled = profile.Enabled,
+            AntiBlurPerspective = profile.AntiBlurPerspective,
+            AntiBlurDiveMosaic = profile.AntiBlurDiveMosaic,
+            HideUid = profile.HideUid,
+            GamePath = profile.GamePath,
         };
     }
 
-    private object BuildConfigDto() => new
+    private UnlockerConfigDto BuildConfigDto() => new()
     {
-        activeGame = GameCatalog.Get(_config.ActiveGame).Key,
-        games = new
+        ActiveGame = _config.ActiveGame,
+        Games = new GameProfilesDto
         {
-            genshin = BuildGameProfileDto(GameId.Genshin),
-            starRail = BuildGameProfileDto(GameId.StarRail),
+            Genshin = BuildGameProfileDto(GameId.Genshin),
+            StarRail = BuildGameProfileDto(GameId.StarRail),
         },
-        masterEnabled = _config.MasterEnabled,
-        autoWatch = _config.AutoWatch,
-        startMinimized = _config.StartMinimized,
-        autoStartWithWindows = _config.AutoStartWithWindows,
-        autoStartAsAdministrator = _config.AutoStartAsAdministrator,
-        pollIntervalMs = _config.PollIntervalMs,
-        safetyNoticeAcknowledged = _config.SafetyNoticeAcknowledged,
-        showSafetyNoticeOnStartup = _config.ShowSafetyNoticeOnStartup,
-        defenderExclusionApplied = _config.DefenderExclusionApplied,
-        debugLogging = _config.DebugLogging,
-        logLevel = _config.LogLevel,
-        logRetainDays = _config.LogRetainDays,
-        suppressAdminHint = _config.SuppressAdminHint,
+        MasterEnabled = _config.MasterEnabled,
+        AutoWatch = _config.AutoWatch,
+        StartMinimized = _config.StartMinimized,
+        AutoStartWithWindows = _config.AutoStartWithWindows,
+        AutoStartAsAdministrator = _config.AutoStartAsAdministrator,
+        PollIntervalMs = _config.PollIntervalMs,
+        SafetyNoticeAcknowledged = _config.SafetyNoticeAcknowledged,
+        ShowSafetyNoticeOnStartup = _config.ShowSafetyNoticeOnStartup,
+        DefenderExclusionApplied = _config.DefenderExclusionApplied,
+        DebugLogging = _config.DebugLogging,
+        LogLevel = _config.LogLevel,
+        LogRetainDays = _config.LogRetainDays,
+        SuppressAdminHint = _config.SuppressAdminHint,
     };
 
     private static object ReadRecentLogs()
