@@ -8,6 +8,8 @@ internal static class Program
         var harness = new Harness();
         ProcessRunnerTests.Run(harness);
         GameLocatorTests.Run(harness);
+        PathUtilTests.Run(harness);
+        StarRailFpsSettingsTests.Run(harness);
         TrayGameFollowStateTests.Run(harness);
         WindowLocationStateTests.Run(harness);
         RunningSessionTrackerTests.Run(harness);

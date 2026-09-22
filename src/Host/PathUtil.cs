@@ -99,10 +99,15 @@ internal static class PathUtil
     /// </summary>
     public static bool IsUnder(string? child, string? parent)
     {
-        var c = Normalize(child) + Path.DirectorySeparatorChar;
-        var p = Normalize(parent) + Path.DirectorySeparatorChar;
-        if (string.IsNullOrEmpty(c) || string.IsNullOrEmpty(p)) return false;
-        return c.StartsWith(p, StringComparison.OrdinalIgnoreCase);
+        // 先判空再拼分隔符：Normalize 对空 / 空白输入返回 ""，拼上分隔符后就成了 "\"，
+        // 判空条件永远不会成立（旧写法的空值守卫是死代码）。
+        var normalizedChild = Normalize(child);
+        var normalizedParent = Normalize(parent);
+        if (string.IsNullOrEmpty(normalizedChild) || string.IsNullOrEmpty(normalizedParent)) return false;
+
+        // 追加目录分隔符，避免 C:\Foo 误匹配 C:\FooBar。
+        return (normalizedChild + Path.DirectorySeparatorChar)
+            .StartsWith(normalizedParent + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>安全取父目录名；非法路径返回 null。</summary>

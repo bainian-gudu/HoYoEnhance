@@ -15,6 +15,35 @@ export type ModalType = 'path' | 'safety' | 'launch' | 'reset' | 'clearLogs' | '
 export type LaunchState = 'idle' | 'launching' | 'running';
 
 /**
+ * 把「还没下发到宿主的本地改动」叠加到宿主推来的配置上。
+ *
+ * 宿主的 state 是它此刻知道的配置，pendingPatch 是用户刚改、还没生效的意图。节流窗口
+ * （帧率 350ms、其它 80ms）内到达的状态推送必须让后者赢，否则帧率滑块与开关会被打回
+ * 旧值、几百毫秒后再跳回来。只保护 activeGame 是不够的 —— 那只是其中一种字段。
+ */
+function mergePendingPatch(config: UnlockerConfig, patch: Record<string, unknown>): UnlockerConfig {
+  const keys = Object.keys(patch).filter((key) => key !== 'games' && key in config);
+  const hasGames = patch.games !== undefined;
+  if (!keys.length && !hasGames) return config;
+
+  const next: Record<string, unknown> = { ...config };
+  for (const key of keys) next[key] = patch[key];
+
+  if (hasGames) {
+    const games: Record<GameId, GameProfile> = { ...config.games };
+    const incoming = patch.games;
+    if (typeof incoming === 'object' && incoming !== null) {
+      for (const [id, values] of Object.entries(incoming as Record<string, unknown>)) {
+        if (!isGameId(id) || typeof values !== 'object' || values === null) continue;
+        games[id] = { ...games[id], ...(values as Partial<GameProfile>) };
+      }
+    }
+    next.games = games;
+  }
+  return next as unknown as UnlockerConfig;
+}
+
+/**
  * 应用级状态与动作：配置 / 日志 / 主题 / 导航 / 原生桥（WebView2）以及全部交互回调。
  * 原先内联在 App.tsx 中，此处按原样拆出，行为未变；组件通过 AppState 取用。
  */
@@ -117,9 +146,11 @@ export function useAppState() {
     if (hostAccepted && overrideChoice) localGameOverride.current = null;
 
     const keepLocalGame = localChoice !== null && !hostAccepted;
-    setConfig(keepLocalGame
-      ? (previous) => ({ ...state.config, activeGame: previous.activeGame })
-      : state.config);
+    // 快照待下发的本地改动：这次推送不能把用户刚改、还没生效的值打回去。
+    const pending = pendingPatch.current;
+    setConfig((previous) => mergePendingPatch(
+      keepLocalGame ? { ...state.config, activeGame: previous.activeGame } : state.config,
+      pending));
     setDisplayGame(keepLocalGame && localChoice !== null ? localChoice : state.displayGame);
     setSaveState(state.saveState);
     setStatusText(state.statusText || '就绪');

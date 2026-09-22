@@ -249,10 +249,10 @@ internal sealed partial class UnlockService
                     featuresActive && profile.AntiBlurPerspective,
                     featuresActive && descriptor.SupportsDiveMosaic && profile.AntiBlurDiveMosaic,
                     featuresActive && profile.HideUid);
-                _ipcOwner = game;
+                Volatile.Write(ref _ipcOwnerValue, EncodeGame(game));
                 _lastPushedFps = profile.TargetFps;
                 _lastPushedEnabled = activeUnlock ? 1 : 0;
-                _lastIpcPushUtc = DateTime.UtcNow;
+                Volatile.Write(ref _lastIpcPushTick, Environment.TickCount64);
 
                 SetStatus($"{descriptor.ShortName}：检测到游戏 PID {process.Id}，等待主窗口后注入…");
                 await WaitForMainWindowAsync(process, token, TimeSpan.FromSeconds(45));
@@ -621,10 +621,12 @@ internal sealed partial class UnlockService
     /// <summary>触发 StateChanged；默认 250ms 节流，forceUi 时立即触发。</summary>
     private void Raise(bool forceUi)
     {
-        var now = DateTime.UtcNow;
-        if (!forceUi && (now - _lastUiRaiseUtc).TotalMilliseconds < 250)
+        // 节流判断在锁外、且会被 UI 线程与监视线程同时走到：用 TickCount64 + Volatile，
+        // 保证「读到的时间戳」不会撕裂，也避免系统对时把节流窗口算成负数。
+        var now = Environment.TickCount64;
+        if (!forceUi && now - Volatile.Read(ref _lastUiRaiseTick) < 250)
             return;
-        _lastUiRaiseUtc = now;
+        Volatile.Write(ref _lastUiRaiseTick, now);
 
         lock (_raiseLock)
         {

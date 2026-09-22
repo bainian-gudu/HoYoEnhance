@@ -51,10 +51,21 @@ internal sealed partial class UiBridge : IDisposable
 
     public void Attach(WebView2 webView)
     {
+        // 换 webview 前先摘掉旧订阅：Attach 目前只有一条调用路径，但漏摘会让旧控件
+        // 继续往桥里投消息，而 Dispose 也只解绑当时那一个。
+        DetachWebViewEvents();
         _webView = webView;
         _lastStateJson = null;  // 新 webview 没收到过任何状态，作废去重缓存
         _logPushBroken = false; // 新 webview 重新允许增量日志
         webView.CoreWebView2.WebMessageReceived += OnWebMessageReceived;
+    }
+
+    /// <summary>解绑当前 webview 的消息订阅（拆控件时可能抛，忽略即可）。</summary>
+    private void DetachWebViewEvents()
+    {
+        if (_webView?.CoreWebView2 is null) return;
+        try { _webView.CoreWebView2.WebMessageReceived -= OnWebMessageReceived; }
+        catch { /* 控件正在拆除 */ }
     }
 
     public void PushState()
@@ -290,10 +301,6 @@ internal sealed partial class UiBridge : IDisposable
         _disposed = true;
         _service.StateChanged -= OnServiceStateChanged;
         AppLog.EntryLogged -= OnAppLogEntry;
-        if (_webView?.CoreWebView2 is not null)
-        {
-            try { _webView.CoreWebView2.WebMessageReceived -= OnWebMessageReceived; }
-            catch { /* ignore */ }
-        }
+        DetachWebViewEvents();
     }
 }

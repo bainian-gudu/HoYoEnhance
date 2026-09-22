@@ -23,16 +23,16 @@ internal sealed partial class UnlockService : IDisposable
         public int InjectFailStreak;
         /// <summary>下一次允许尝试注入的 UTC 时间。</summary>
         public DateTime NextInjectAttemptUtc = DateTime.MinValue;
-        /// <summary>该游戏的路径状态文案（UI 按当前游戏显示）。</summary>
-        public string PathStatus = "";
+        /// <summary>该游戏的路径状态文案（UI 按当前游戏显示）：监视线程写、UI 线程读。</summary>
+        public volatile string PathStatus = "";
         /// <summary>本进程内是否已经跑过自动定位（避免反复扫盘）。</summary>
         public bool AutoLocateAttempted;
         /// <summary>星穹铁道：是否需要重新核对注册表。</summary>
         public bool RegistryCheckPending = true;
         /// <summary>星穹铁道：已核对过注册表的 PID（同一进程只核对一次，避免反复写）。</summary>
         public int RegistryCheckedPid;
-        /// <summary>星穹铁道：最近一次注册表核对的结果文案。</summary>
-        public string RegistryStatus = "尚未检查注册表";
+        /// <summary>星穹铁道：最近一次注册表核对的结果文案（同上，跨线程读）。</summary>
+        public volatile string RegistryStatus = "尚未检查注册表";
         /// <summary>该游戏注入模块的完整路径。</summary>
         public string StubPath = "";
     }
@@ -69,23 +69,28 @@ internal sealed partial class UnlockService : IDisposable
     /// <summary>
     /// 共享内存当前属于哪款游戏的 Stub（注入时确定）。映射只有一个槽位，
     /// 属于 A 游戏时不能再拿 B 游戏的档案去写它，否则会把 A 的目标帧率 / 开关冲掉。
+    /// 取值与 <see cref="AttachedGame"/> 同一套编码（0 = 未占用）；监视线程写、
+    /// UI 线程也会读（改配置时的 PushConfigToIpc），所以用 int + Volatile。
     /// </summary>
-    private GameId? _ipcOwner;
+    private int _ipcOwnerValue;
     private int _attachedPid;
     private string _statusText = "空闲 — 等待游戏启动";
     private bool _disposed;
 
     // ---- IPC / UI 节流状态 ----
-    private int _lastPushedFps = int.MinValue;
-    private int _lastPushedEnabled = int.MinValue;
-    private DateTime _lastIpcPushUtc = DateTime.MinValue;
-    private DateTime _lastUiRaiseUtc = DateTime.MinValue;
+    // 这几个字段同时被 UI 线程（用户改配置 → 立即推送）与监视线程（保活推送）读写：
+    // 计数用 volatile，时间戳用 Environment.TickCount64 的 long + Volatile。
+    // （DateTime 不能标 volatile；TickCount64 是单调时钟，也不会被系统对时带偏。）
+    private volatile int _lastPushedFps = int.MinValue;
+    private volatile int _lastPushedEnabled = int.MinValue;
+    private long _lastIpcPushTick;
+    private long _lastUiRaiseTick;
 
     // ---- 历史残留组件清理（见 LegacyProxyCleanup，仅原神） ----
     /// <summary>游戏目录里是否还可能有上一版本部署的代理组件（1 = 需要重试清理）。</summary>
     private int _legacyCleanupPending;
-    /// <summary>下一次允许重试清理的 UTC 时间：文件被游戏占用时不必每轮都撞一遍。</summary>
-    private DateTime _nextLegacyCleanupUtc = DateTime.MinValue;
+    /// <summary>下一次允许重试清理的时刻（TickCount64）：文件被游戏占用时不必每轮都撞一遍。</summary>
+    private long _nextLegacyCleanupTick;
 
     /// <summary>状态变化（UI 应 Invoke 到 UI 线程后刷新）。</summary>
     public event Action? StateChanged;
@@ -235,7 +240,7 @@ internal sealed partial class UnlockService : IDisposable
     /// </summary>
     public void QueueLegacyCleanup()
     {
-        _nextLegacyCleanupUtc = DateTime.MinValue;
+        Volatile.Write(ref _nextLegacyCleanupTick, 0);
         Interlocked.Exchange(ref _legacyCleanupPending, 1);
     }
 
@@ -243,9 +248,9 @@ internal sealed partial class UnlockService : IDisposable
     private void TryRunLegacyCleanup()
     {
         if (Volatile.Read(ref _legacyCleanupPending) == 0) return;
-        var now = DateTime.UtcNow;
-        if (now < _nextLegacyCleanupUtc) return;
-        _nextLegacyCleanupUtc = now.AddSeconds(10);
+        var now = Environment.TickCount64;
+        if (now < Volatile.Read(ref _nextLegacyCleanupTick)) return;
+        Volatile.Write(ref _nextLegacyCleanupTick, now + 10_000);
 
         if (LegacyProxyCleanup.TryCleanup(_config.Profile(GameId.Genshin).GamePath))
             Interlocked.Exchange(ref _legacyCleanupPending, 0);
@@ -262,17 +267,17 @@ internal sealed partial class UnlockService : IDisposable
         // 附着的游戏走，其次是用户选择的那款。
         var game = AttachedGame ?? RunningGame ?? _config.ActiveGame;
         // 映射已经被另一款游戏的 Stub 占用（它可能仍在运行）：不要动它的任何字段。
-        if (_ipcOwner is GameId owner && owner != game) return;
+        if (DecodeGame(Volatile.Read(ref _ipcOwnerValue)) is GameId owner && owner != game) return;
         var descriptor = GameCatalog.Get(game);
         var profile = _config.Profile(game);
         var fps = profile.TargetFps;
         // 走注册表的游戏不通过 Stub 改帧率，只下发画面效果开关。
         var en = NeedsInjection(game) && profile.Enabled && !descriptor.FpsViaRegistry ? 1 : 0;
-        var now = DateTime.UtcNow;
+        var now = Environment.TickCount64;
 
         // 跳过冗余写入
         var changed = fps != _lastPushedFps || en != _lastPushedEnabled;
-        if (!force && !changed && (now - _lastIpcPushUtc).TotalMilliseconds < 400)
+        if (!force && !changed && now - Volatile.Read(ref _lastIpcPushTick) < 400)
         {
             return;
         }
@@ -291,7 +296,7 @@ internal sealed partial class UnlockService : IDisposable
             featuresActive && profile.HideUid);
         _lastPushedFps = fps;
         _lastPushedEnabled = en;
-        _lastIpcPushUtc = now;
+        Volatile.Write(ref _lastIpcPushTick, now);
 
         // 只在「真的变了」或强制推送时记一行：保活式的重复写入每秒能有两三次，
         // 全记下来会把日志文件和界面日志页（现在会实时增量显示宿主日志）刷满。

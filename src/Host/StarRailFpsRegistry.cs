@@ -1,5 +1,3 @@
-using System.Text.Json;
-using System.Text.Json.Nodes;
 using Microsoft.Win32;
 
 namespace GenshinFpsUnlocker.Host;
@@ -50,12 +48,6 @@ internal static class StarRailFpsRegistry
     /// <summary>该游戏唯一支持的解锁帧率。</summary>
     public const int TargetFps = 120;
 
-    /// <summary>画面设置值名前缀。</summary>
-    private const string ModelValuePrefix = "GraphicsSettings_Model_h";
-
-    /// <summary>设置值里的帧率字段名。</summary>
-    private const string FpsPropertyName = "FPS";
-
     /// <summary>可能的注册表位置（国服键名是中文；另两个是历史 / 国际服写法）。</summary>
     private static readonly string[] CandidateKeyPaths =
     [
@@ -80,8 +72,8 @@ internal static class StarRailFpsRegistry
                     return new StarRailFpsResult(StarRailFpsOutcome.ValueMissing, null, null,
                         $"{path} 下还没有画面设置（GraphicsSettings_Model_h*）：请先启动一次游戏");
 
-                var (name, json) = target.Value;
-                if (!TryReadFps(json, out var fps))
+                var (name, json, _) = target.Value;
+                if (!StarRailFpsSettings.TryReadFps(json, out var fps))
                     return new StarRailFpsResult(StarRailFpsOutcome.UnsupportedValue, null, name,
                         $"无法从 {name} 解析 FPS 字段");
 
@@ -116,8 +108,8 @@ internal static class StarRailFpsRegistry
                     return new StarRailFpsResult(StarRailFpsOutcome.ValueMissing, null, null,
                         $"{path} 下还没有画面设置：请先启动一次游戏再开启解锁");
 
-                var (name, json) = target.Value;
-                if (!TryReadFps(json, out var fps))
+                var (name, json, kind) = target.Value;
+                if (!StarRailFpsSettings.TryReadFps(json, out var fps))
                     return new StarRailFpsResult(StarRailFpsOutcome.UnsupportedValue, null, name,
                         $"无法从 {name} 解析 FPS 字段，已跳过写入");
 
@@ -125,13 +117,18 @@ internal static class StarRailFpsRegistry
                     return new StarRailFpsResult(StarRailFpsOutcome.AlreadyAtTarget, fps, name,
                         $"{name} 已经是 {TargetFps} FPS，未覆盖");
 
-                var updated = WriteFps(json, TargetFps);
+                var updated = StarRailFpsSettings.WriteFps(json, TargetFps);
                 using var writable = Registry.CurrentUser.OpenSubKey(path, writable: true);
                 if (writable is null)
                     return new StarRailFpsResult(StarRailFpsOutcome.RegistryError, fps, name,
                         $"注册表项不可写：{path}");
 
-                writable.SetValue(name, updated, RegistryValueKind.String);
+                // 按游戏原本写的类型回写：画面设置出现过 REG_MULTI_SZ 写法，一律写成
+                // REG_SZ 会让游戏读不到，表现为「开关打开了但解锁静默失效」。
+                if (kind == RegistryValueKind.MultiString)
+                    writable.SetValue(name, new[] { updated }, RegistryValueKind.MultiString);
+                else
+                    writable.SetValue(name, updated, RegistryValueKind.String);
                 return new StarRailFpsResult(StarRailFpsOutcome.Written, TargetFps, name,
                     $"{name}：{fps} → {TargetFps} FPS（重启游戏后生效）");
             }
@@ -146,73 +143,28 @@ internal static class StarRailFpsRegistry
             "注册表里没有找到星穹铁道的画面设置：请先启动一次游戏再开启解锁");
     }
 
-    /// <summary>按前缀找出后缀版本号最大的画面设置值。</summary>
-    private static (string Name, string Json)? FindNewestModelValue(RegistryKey key)
+    /// <summary>
+    /// 按前缀找出后缀版本号最大的画面设置值，连同它的值类型一起返回
+    /// （写回时要保持原类型）。
+    /// </summary>
+    private static (string Name, string Json, RegistryValueKind Kind)? FindNewestModelValue(RegistryKey key)
     {
-        string? bestName = null;
-        var bestVersion = -1L;
+        if (!StarRailFpsSettings.TryPickNewestValueName(key.GetValueNames(), out var name)) return null;
 
-        foreach (var name in key.GetValueNames())
-        {
-            if (!name.StartsWith(ModelValuePrefix, StringComparison.OrdinalIgnoreCase)) continue;
-            var suffix = name[ModelValuePrefix.Length..];
-            var version = long.TryParse(suffix, out var parsed) ? parsed : 0;
-            if (version < bestVersion) continue;
-            bestVersion = version;
-            bestName = name;
-        }
-
-        if (bestName is null) return null;
-        var raw = key.GetValue(bestName);
+        var raw = key.GetValue(name);
         var json = raw switch
         {
             string s => s,
             string[] array when array.Length > 0 => array[0],
             _ => null,
         };
-        return json is null ? null : (bestName, json);
-    }
+        if (json is null) return null;
 
-    /// <summary>从设置 JSON 里读 FPS 字段（大小写不敏感）。</summary>
-    private static bool TryReadFps(string json, out int fps)
-    {
-        fps = 0;
-        try
-        {
-            using var doc = JsonDocument.Parse(json);
-            if (doc.RootElement.ValueKind != JsonValueKind.Object) return false;
-            foreach (var property in doc.RootElement.EnumerateObject())
-            {
-                if (!property.Name.Equals(FpsPropertyName, StringComparison.OrdinalIgnoreCase)) continue;
-                if (property.Value.ValueKind != JsonValueKind.Number) return false;
-                fps = property.Value.GetInt32();
-                return true;
-            }
-        }
-        catch
-        {
-            return false;
-        }
-        return false;
-    }
+        // 值类型读不到时退回 REG_SZ：能读能写总比整段拒绝写入好，且这是历史默认。
+        RegistryValueKind kind;
+        try { kind = key.GetValueKind(name); }
+        catch { kind = RegistryValueKind.String; }
 
-    /// <summary>把设置 JSON 里的 FPS 字段改成目标值，其余字段原样保留。</summary>
-    private static string WriteFps(string json, int fps)
-    {
-        var node = JsonNode.Parse(json);
-        if (node is not JsonObject obj) throw new InvalidOperationException("画面设置不是 JSON 对象");
-
-        string? key = null;
-        foreach (var pair in obj)
-        {
-            if (pair.Key.Equals(FpsPropertyName, StringComparison.OrdinalIgnoreCase))
-            {
-                key = pair.Key;
-                break;
-            }
-        }
-
-        obj[key ?? FpsPropertyName] = fps;
-        return obj.ToJsonString();
+        return (name, json, kind);
     }
 }

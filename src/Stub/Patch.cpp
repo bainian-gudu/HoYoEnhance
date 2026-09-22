@@ -69,13 +69,17 @@ namespace PatchUtil
         const uintptr_t address = reinterpret_cast<uintptr_t>(dst);
         auto* word = reinterpret_cast<uint64_t*>(address & kAlignMask);
         const size_t offset = address & 7;
-        for (;;)
+        // 有界重试：同一字上若有持续的竞争写者，循环可以一直失败下去。本文件的约定是
+        // 「做不到原子就不做」—— 超限返回 false，调用方保持原状，绝不半途生效。
+        constexpr int kMaxAttempts = 16;
+        for (int attempt = 0; attempt < kMaxAttempts; ++attempt)
         {
             const uint64_t current = AtomicLoad64(word);
             uint64_t next = current;
             std::memcpy(reinterpret_cast<uint8_t*>(&next) + offset, src, n);
             if (AtomicCas64(word, current, next)) return true;
         }
+        return false;
     }
 }
 
