@@ -3,7 +3,7 @@ using Microsoft.Web.WebView2.WinForms;
 namespace GenshinFpsUnlocker.Host;
 
 /// <summary>
-/// 主窗口：嵌入 WebView2 呈现设计稿 UI；关闭/最小化 → 托盘，与 UI「启动后最小化」一致。
+/// 主窗口：嵌入 WebView2 呈现设计稿 UI；是否将最小化 / 关闭驻留托盘跟随 UI 开关。
 /// </summary>
 internal sealed partial class MainForm : Form
 {

@@ -34,7 +34,7 @@ export function StatusBar({ app }: { app: AppState }) {
         </span>
         {native && <>
           <span className="status-bar-separator" />
-          <button type="button" className="status-tray-btn" title="最小化到系统托盘（关闭窗口同样驻留后台）"
+          <button type="button" className="status-tray-btn" title="隐藏到系统托盘"
             onClick={() => { void nativeInvoke('minimizeToTray').catch(() => undefined); }}>
             <PanelBottomClose size={13} />驻留托盘
           </button>

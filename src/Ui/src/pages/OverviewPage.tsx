@@ -48,7 +48,7 @@ export function OverviewPage({ app }: { app: AppState }) {
             <ToggleRow icon={ScanLine} title="自动解锁" description="检测到游戏启动后，自动应用帧率设置" checked={config.autoWatch} onChange={(value) => updateConfig('autoWatch', value)} />
             <ToggleRow icon={Power} title="开机自启动" description="登录 Windows 后自动启动，在后台等待游戏运行" checked={config.autoStartWithWindows} onChange={(value) => updateConfig('autoStartWithWindows', value)} />
             <ToggleRow icon={Shield} title="启动时自动提权" description="登录自启改由最高权限计划任务启动（不弹 UAC）；手动启动请求一次 UAC" checked={config.autoStartAsAdministrator} onChange={(value) => updateConfig('autoStartAsAdministrator', value)} />
-            <ToggleRow icon={PanelBottomClose} title="启动后最小化到托盘" description="开启后直接进托盘，关闭主窗口也进入托盘后台" checked={config.startMinimized} onChange={(value) => updateConfig('startMinimized', value)} />
+            <ToggleRow icon={PanelBottomClose} title="启动后最小化到托盘" description="开启：启动、最小化和关闭都驻留托盘；关闭：最小化到任务栏，关闭窗口退出程序" checked={config.startMinimized} onChange={(value) => updateConfig('startMinimized', value)} />
           </div></section>
         </div>
       </motion.div>

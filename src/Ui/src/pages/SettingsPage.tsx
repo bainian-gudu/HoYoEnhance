@@ -90,7 +90,7 @@ export function SettingsPage({ game, gameConfig, updateGameConfig, config, updat
         <ToggleRow title="开机自启动" description="登录 Windows 后自动启动，在后台等待游戏运行" checked={config.autoStartWithWindows} onChange={(value) => updateConfig('autoStartWithWindows', value)} />
         <ToggleRow title="启动时自动以管理员权限运行" description="登录自启改由最高权限计划任务启动（不弹 UAC）；手动启动会请求一次 UAC" checked={config.autoStartAsAdministrator} onChange={(value) => updateConfig('autoStartAsAdministrator', value)} />
         {config.autoStartWithWindows && autostartNotice && <p className={`settings-small-note${autostart.notice ? ' is-warning' : ''}`}><ShieldCheck size={14} />{autostartNotice}</p>}
-        <ToggleRow title="启动后最小化到托盘" description="开启：下次启动直接进托盘。关闭主窗口或点最小化 → 始终进入托盘后台（托盘「退出」才结束）" checked={config.startMinimized} onChange={(value) => updateConfig('startMinimized', value)} />
+        <ToggleRow title="启动后最小化到托盘" description="开启：启动、最小化和关闭都驻留托盘；关闭：启动显示窗口，最小化到任务栏，关闭窗口退出程序" checked={config.startMinimized} onChange={(value) => updateConfig('startMinimized', value)} />
         <ToggleRow title="启动时显示用户协议" description="每次手动启动时展示用户协议与安全声明" checked={config.showSafetyNoticeOnStartup} onChange={(value) => updateConfig('showSafetyNoticeOnStartup', value)} />
         {isNative && <ToggleRow title="隐藏管理员权限提醒" description="关闭后，概览页不再显示「以管理员重新启动」提示条" checked={config.suppressAdminHint} onChange={(value) => updateConfig('suppressAdminHint', value)} />}
         {isNative && (

@@ -58,7 +58,8 @@ internal sealed partial class MainForm : Form
     /// <summary>Explorer 重启或登录后就绪时，重新注册托盘图标；标题栏最小化 → 托盘。</summary>
     protected override void WndProc(ref Message m)
     {
-        // 拦截标题栏 ▁ 的系统最小化命令：直接进托盘，窗口永不进入 Minimized 态。
+        // 托盘驻留开启时拦截标题栏 ▁ 的系统最小化命令：直接进托盘，窗口永不进入
+        // Minimized 态。关闭时交回系统，走正常任务栏最小化。
         // 否则 Resize 兜底路径会在「已最小化 + 摘除任务栏」的窗口上触发 RecreateHandle，
         // Windows 把这个瞬时窗口以遗留「最小化图标条」画在工作区左下角并闪现一帧。
         // （退出 / 启动进托盘阶段不拦；Win+↓、任务栏「最小化所有窗口」等不发
@@ -67,7 +68,8 @@ internal sealed partial class MainForm : Form
         const int scMinimize = 0xF020;   // SC_MINIMIZE
         if (m.Msg == wmSyscommand
             && (m.WParam.ToInt32() & 0xFFF0) == scMinimize
-            && !_reallyExit && !_startupTrayPending)
+            && !_reallyExit && !_startupTrayPending
+            && WindowTrayPolicy.ShouldHideToTray(_config.StartMinimized))
         {
             HideToTrayPublic(showTip: true, fromStartup: false);
             return; // 不交给 base → 永远不发生系统最小化

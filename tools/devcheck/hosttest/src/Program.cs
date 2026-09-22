@@ -16,6 +16,7 @@ internal static class Program
         AutostartTests.Run(harness);
         ConfigExportTests.Run(harness);
         ConfigContractTests.Run(harness);
+        WindowTrayPolicyTests.Run(harness);
         return harness.Report();
     }
 }

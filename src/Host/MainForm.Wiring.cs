@@ -286,12 +286,14 @@ internal sealed partial class MainForm
         // 用户拖动窗口后记录位置：下次打开 / 从托盘恢复都回到这里，不再强制居中。
         LocationChanged += (_, _) => QueueWindowLocationSave();
 
-        // 标题栏最小化 → 托盘（始终）。优先 WndProc 拦截 SC_MINIMIZE，避免系统最小化动画闪烁；
-        // Resize 仅作兜底（例如任务栏「最小化所有窗口」等路径）。
+        // 托盘驻留开启时，标题栏最小化 → 托盘；优先 WndProc 拦截 SC_MINIMIZE，
+        // 避免系统最小化动画闪烁。关闭时保留系统任务栏最小化。
+        // Resize 仅作托盘路径的兜底（例如任务栏「最小化所有窗口」等路径）。
         Resize += (_, _) =>
         {
             if (_suppressResizeHide || _hidingToTray || _reallyExit || _inTray) return;
-            if (WindowState == FormWindowState.Minimized)
+            if (WindowState == FormWindowState.Minimized
+                && WindowTrayPolicy.ShouldHideToTray(_config.StartMinimized))
                 HideToTrayPublic(showTip: true, fromStartup: false);
         };
 
@@ -314,10 +316,12 @@ internal sealed partial class MainForm
             catch { /* ignore */ }
         };
 
-        // 关窗（×）：进托盘继续后台解锁；托盘「退出」才真正结束
+        // 关窗（×）：托盘驻留开启时继续后台解锁；关闭时按普通窗口退出。
         FormClosing += (_, e) =>
         {
-            if (!_reallyExit && e.CloseReason is CloseReason.UserClosing)
+            if (!_reallyExit
+                && e.CloseReason is CloseReason.UserClosing
+                && WindowTrayPolicy.ShouldHideToTray(_config.StartMinimized))
             {
                 e.Cancel = true;
                 HideToTrayPublic(showTip: true, fromStartup: false);
