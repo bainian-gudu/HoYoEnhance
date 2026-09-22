@@ -424,9 +424,9 @@ internal sealed partial class MainForm : Form
     /// </summary>
     private void CaptureRestoreLocation()
     {
-        if (_windowLocation.Pending is Point pending)
+        if (_windowLocation.Pending is WindowLocation pending)
         {
-            _restoreLocation = pending;
+            _restoreLocation = new Point(pending.X, pending.Y);
             _hasRestoreLocation = true;
             return;
         }
@@ -495,7 +495,7 @@ internal sealed partial class MainForm : Form
         if (_reallyExit || IsDisposed) return;
         if (!Visible || _inTray || WindowState != FormWindowState.Normal) return;
         if (Location.X <= -1000 || Location.Y <= -1000) return;
-        if (!_windowLocation.Observe(Location, _config.WindowLeft, _config.WindowTop)) return;
+        if (!_windowLocation.Observe(new WindowLocation(Location.X, Location.Y), _config.WindowLeft, _config.WindowTop)) return;
 
         if (_windowLocationSaveTimer is null)
         {
@@ -523,7 +523,7 @@ internal sealed partial class MainForm : Form
         try
         {
             _windowLocationSaveTimer?.Stop();
-            if (_windowLocation.Pending is not Point pending) return;
+            if (_windowLocation.Pending is not WindowLocation pending) return;
 
             _config.WindowLeft = pending.X;
             _config.WindowTop = pending.Y;
@@ -602,7 +602,7 @@ internal sealed partial class MainForm : Form
             return false;
         }
 
-        if (!Elevation.TryRestartElevatedForUnlock(out error))
+        if (!Program.TryRestartElevatedForUnlock(out error))
             return false;
 
         // 提权实例已拉起：真正退出，不藏托盘

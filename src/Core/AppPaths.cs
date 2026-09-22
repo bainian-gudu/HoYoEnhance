@@ -38,7 +38,8 @@ internal static class AppPaths
     {
         get
         {
-            var exe = Environment.ProcessPath ?? Application.ExecutablePath;
+            var exe = Environment.ProcessPath
+                      ?? Path.Combine(AppContext.BaseDirectory, ExecutableFileName);
             try
             {
                 return PathUtil.Normalize(Path.GetDirectoryName(exe) ?? AppContext.BaseDirectory);

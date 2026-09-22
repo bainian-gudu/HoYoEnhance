@@ -38,6 +38,9 @@
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Core\HoYoEnhance.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="Microsoft.Win32.SystemEvents" Version="9.0.0" />
     <!-- WinForms 宿主只用 Core；排除 Wpf 以免 MSB3277 (WindowsBase 4 vs 5) -->
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />

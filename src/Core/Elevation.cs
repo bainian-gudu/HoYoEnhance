@@ -58,38 +58,4 @@ internal static class Elevation
         }
     }
 
-    /// <summary>
-    /// 用户主动：释放单实例后以管理员重新启动主程序（显示主窗）。
-    /// 成功拉起后应退出当前进程。不用于开机自启。
-    /// </summary>
-    public static bool TryRestartElevatedForUnlock(out string error)
-    {
-        error = string.Empty;
-        if (IsAdministrator())
-        {
-            error = "当前已是管理员权限。";
-            return false;
-        }
-
-        // 先释放互斥，避免提权实例被「已在运行」挡住
-        try { Program.ReleaseSingleInstance(); }
-        catch (Exception ex) { AppLog.Warn("ReleaseSingleInstance: " + ex.Message); }
-
-        // --elevated-restart：提权后显示主窗但不改动「启动后最小化」配置；
-        // --elevated-handoff 让新实例在旧实例
-        // 释放互斥的交接窗口内短暂重试，避免启动竞态导致管理员实例立即退出。
-        if (!TryRelaunchElevated("--elevated-restart --elevated-handoff", out error))
-        {
-            // 提权没成（多半是用户在 UAC 点了「否」）：把刚释放的锁拿回来，
-            // 否则本进程还在跑却不再持有单实例锁 → 再点快捷方式就双开。
-            if (!Program.ReacquireSingleInstance())
-            {
-                error = "提权已取消，且无法恢复单实例状态（可能已有另一个实例在运行）。" + error;
-            }
-            return false;
-        }
-
-        AppLog.Info("已请求以管理员身份重新启动");
-        return true;
-    }
 }

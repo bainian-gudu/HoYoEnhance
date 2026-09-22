@@ -108,7 +108,7 @@ jobs:
     # --- 6) hosttest：把 ProcessRunner 超时路径上的 KillTree 拿掉 ---
     #      只注入一个能编过的行为错误（少杀进程树，而不是改标记或提前 return，
     #      后两者会带 CS0162 噪音或者只在特定断言上暴露）。
-    $processRunner = Join-Path $RepoRoot 'src/Host/ProcessRunner.cs'
+    $processRunner = Join-Path $RepoRoot 'src/Core/ProcessRunner.cs'
     Add-Case 'hosttest 层能抓到超时没杀进程树' `
         -Mutate {
             $text = [System.IO.File]::ReadAllText($processRunner)
@@ -124,7 +124,7 @@ jobs:
     # --- 7) hosttest：磁盘快扫的目录剪枝被改坏 ---
     #      注入方式是删掉剪枝表里的系统目录那一行（而不是 return false），
     #      编译干净、没有 CS0162 噪音，只有真的跑断言才会发现。
-    $gameLocatorHelpers = Join-Path $RepoRoot 'src/Host/GameLocator.Helpers.cs'
+    $gameLocatorHelpers = Join-Path $RepoRoot 'src/Core/GameLocator.Helpers.cs'
     Add-Case 'hosttest 层能抓到快扫不再剪枝系统目录' `
         -Mutate {
             $text = [System.IO.File]::ReadAllText($gameLocatorHelpers)
@@ -136,6 +136,19 @@ jobs:
         } `
         -Run { Test-HostTest } `
         -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $gameLocatorHelpers) -Path $gameLocatorHelpers }
+
+    # --- 8) host：Core 工程重新引入 WinForms 就必须报错 ---
+    $coreProject = Join-Path $RepoRoot 'src/Core/HoYoEnhance.Core.csproj'
+    Add-Case 'host 层能抓到 Core 重新依赖 WinForms' `
+        -Mutate {
+            $text = [System.IO.File]::ReadAllText($coreProject)
+            $needle = '<TargetFramework>net9.0-windows10.0.18362.0</TargetFramework>'
+            $broken = $text.Replace($needle, $needle + "`n    <UseWindowsForms>true</UseWindowsForms>")
+            if ($broken -eq $text) { throw '注入失败：没找到 Core 的 TargetFramework' }
+            [System.IO.File]::WriteAllText($coreProject, $broken)
+        } `
+        -Run { Test-Host } `
+        -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $coreProject) -Path $coreProject }
 
     # 先按磁盘备份清掉上一次被中断的自检留下的注入，再上锁独占。
     Clear-RepoMutations

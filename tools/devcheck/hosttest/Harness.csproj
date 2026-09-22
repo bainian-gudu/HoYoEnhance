@@ -3,7 +3,7 @@
     Host 行为的自包含测试台：只用 .NET SDK 自带的 BCL，不引入 xunit / MSTest，
     因此 devcheck 不需要访问 nuget.org 也能跑。
 
-    引用宿主工程（WinExe、win-x64），所以测试进程本身只能在 Windows 上运行；
+    引用宿主工程（WinExe、win-x64）与其 Core 工程，所以测试进程本身只能在 Windows 上运行；
     Linux/macOS 上这一层由 PowerShell 侧跳过，只做「能不能编过」的验证。
   -->
   <PropertyGroup>

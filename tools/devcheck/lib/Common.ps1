@@ -121,8 +121,9 @@ $script:SelfTestRepoFiles = @(
     '.github/workflows/build.yml',
     'packaging/pack.ps1',
     'packaging/packaging.config.json',
-    'src/Host/ProcessRunner.cs',
-    'src/Host/GameLocator.Helpers.cs'
+    'src/Core/HoYoEnhance.Core.csproj',
+    'src/Core/ProcessRunner.cs',
+    'src/Core/GameLocator.Helpers.cs'
 )
 
 function Clear-RepoMutations {

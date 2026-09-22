@@ -98,22 +98,11 @@ internal static partial class GameLocator
             $"请手动选择 {GameCatalog.ExeNameList(game)}");
     }
 
-    /// <summary>打开文件对话框供用户手动选择主程序。</summary>
-    public static GameLocateResult LocateManual(GameDescriptor game, IWin32Window? owner = null)
+    /// <summary>通过外壳提供的交互入口手动选择主程序。</summary>
+    public static GameLocateResult LocateManual(GameDescriptor game, IUserInteraction interaction)
     {
-        var exeFilter = string.Join(";", game.ExeNames);
-        using var ofd = new OpenFileDialog
-        {
-            Title = $"选择{game.DisplayName}主程序（{GameCatalog.ExeNameList(game)}）",
-            Filter = $"{game.DisplayName}主程序|{exeFilter}|可执行文件 (*.exe)|*.exe|所有文件|*.*",
-            CheckFileExists = true,
-            Multiselect = false,
-        };
-
-        var result = owner is null ? ofd.ShowDialog() : ofd.ShowDialog(owner);
-        if (result != DialogResult.OK) return GameLocateResult.Fail("已取消手动选择");
-
-        var path = ofd.FileName;
+        var path = interaction.SelectGameExecutable(game);
+        if (string.IsNullOrWhiteSpace(path)) return GameLocateResult.Fail("已取消手动选择");
         if (!IsValidGameExe(game, path))
         {
             return GameLocateResult.Fail($"请选择 {GameCatalog.ExeNameList(game)}");

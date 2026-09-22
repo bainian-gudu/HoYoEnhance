@@ -58,12 +58,12 @@ pwsh tools/devcheck/devcheck.ps1 -Layer ui          # 不在 all 里：要先 cd
 `packaging/packaging.config.json` 是「应用侧」的唯一事实来源：安装目录、ARP 名称、
 旧品牌兼容名、卸载时要清理的注册表 / 计划任务 / 快捷方式 / 用户数据目录、UAC 策略、
 协议文件、运行库。安装器只读它，所以「改了宿主却忘了改配置」只能在这里发现 ——
-每一项都拿 `src/Host/AppPaths.cs` / `Autostart.cs` 里的常量交叉断言，而不是在检查里
+每一项都拿 `src/Core/AppPaths.cs` / `Autostart.cs` 里的常量交叉断言，而不是在检查里
 再抄一遍字面量（`AppPaths.cs` 里 `ProductName + ".exe"` 这类表达式会被解析后求值）。
 
 ## `-SelfTest`：证明这套检查不是空壳
 
-检查工具最大的风险是「跑通了但其实什么都没查」。`-SelfTest` 会注入 10 个错误，逐个确认
+检查工具最大的风险是「跑通了但其实什么都没查」。`-SelfTest` 会注入 11 个错误，逐个确认
 对应层会失败：把 kachina 源码搬回仓库、工作流里加一条 `Invoke-WebRequest`、把打包脚本
 的 `$KiraraRepo` 改名、把 `build.yml` 里的 Kirara Release 仓库改成别家、让 `-BuilderPath`
 不再跳过 Kirara 查找、让 builder 路径不再固化绝对路径、放一个语法错误的 `.ps1`、改坏

@@ -398,13 +398,13 @@ internal sealed partial class UnlockService : IDisposable
         return result;
     }
 
-    /// <summary>弹出文件对话框手动选择指定游戏的主程序。</summary>
-    public GameLocateResult SetGamePathManual(GameId game, IWin32Window? owner)
+    /// <summary>通过外壳交互手动选择指定游戏的主程序。</summary>
+    public GameLocateResult SetGamePathManual(GameId game, IUserInteraction interaction)
     {
         var descriptor = GameCatalog.Get(game);
         var profile = _config.Profile(game);
         var session = _sessions[game];
-        var result = GameLocator.LocateManual(descriptor, owner);
+        var result = GameLocator.LocateManual(descriptor, interaction);
         if (result.Ok && result.Path is not null)
         {
             profile.GamePath = PathUtil.Normalize(result.Path);

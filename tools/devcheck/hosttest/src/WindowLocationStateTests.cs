@@ -13,29 +13,29 @@ internal static class WindowLocationStateTests
         {
             var state = new WindowLocationState();
 
-            var scheduled = state.Observe(new Point(120, 80), null, null);
+            var scheduled = state.Observe(new WindowLocation(120, 80), null, null);
             Harness.True(scheduled, "位置从无到有应安排一次落盘");
-            Harness.Equal(new Point(120, 80), state.Pending!.Value, "待落盘位置");
+            Harness.Equal(new WindowLocation(120, 80), state.Pending!.Value, "待落盘位置");
         });
 
         h.Case("已保存值就是当前位置时不再安排落盘", () =>
         {
             var state = new WindowLocationState();
 
-            var scheduled = state.Observe(new Point(300, 200), 300, 200);
+            var scheduled = state.Observe(new WindowLocation(300, 200), 300, 200);
             Harness.False(scheduled, "位置没变不该再写盘");
-            Harness.Equal<Point?>(null, state.Pending, "没有待落盘改动");
+            Harness.Equal<WindowLocation?>(null, state.Pending, "没有待落盘改动");
         });
 
         h.Case("落盘成功后同一位置不再重复写", () =>
         {
             var state = new WindowLocationState();
 
-            state.Observe(new Point(120, 80), null, null);
+            state.Observe(new WindowLocation(120, 80), null, null);
             state.MarkSaved();
-            Harness.Equal<Point?>(null, state.Pending, "落盘成功后应清空");
+            Harness.Equal<WindowLocation?>(null, state.Pending, "落盘成功后应清空");
 
-            var again = state.Observe(new Point(120, 80), 120, 80);
+            var again = state.Observe(new WindowLocation(120, 80), 120, 80);
             Harness.False(again, "同一位置第二次不该再写盘");
         });
 
@@ -43,25 +43,25 @@ internal static class WindowLocationStateTests
         {
             var state = new WindowLocationState();
 
-            state.Observe(new Point(700, 500), 300, 200);
+            state.Observe(new WindowLocation(700, 500), 300, 200);
             Harness.True(state.Pending is not null, "先有一次未落盘的改动");
 
-            var scheduled = state.Observe(new Point(300, 200), 300, 200);
+            var scheduled = state.Observe(new WindowLocation(300, 200), 300, 200);
             Harness.False(scheduled, "拖回原处不必写盘");
-            Harness.Equal<Point?>(null, state.Pending, "待落盘改动应被撤销");
+            Harness.Equal<WindowLocation?>(null, state.Pending, "待落盘改动应被撤销");
         });
 
         h.Case("写盘失败时位置留在状态里，退出前还能补写", () =>
         {
             var state = new WindowLocationState();
 
-            state.Observe(new Point(420, 260), null, null);
+            state.Observe(new WindowLocation(420, 260), null, null);
             // 模拟 TrySave 失败：不调用 MarkSaved，改动必须留着。
-            Harness.Equal(new Point(420, 260), state.Pending!.Value, "失败后位置不能丢");
+            Harness.Equal(new WindowLocation(420, 260), state.Pending!.Value, "失败后位置不能丢");
 
-            var moved = state.Observe(new Point(500, 300), null, null);
+            var moved = state.Observe(new WindowLocation(500, 300), null, null);
             Harness.True(moved, "再次移动仍应安排落盘");
-            Harness.Equal(new Point(500, 300), state.Pending!.Value, "待落盘位置应更新到最新");
+            Harness.Equal(new WindowLocation(500, 300), state.Pending!.Value, "待落盘位置应更新到最新");
         });
 
         h.Case("内存配置已被改成新值也不影响落盘判断", () =>
@@ -73,7 +73,7 @@ internal static class WindowLocationStateTests
             int? configLeft = null;
             int? configTop = null;
 
-            var location = new Point(640, 360);
+            var location = new WindowLocation(640, 360);
             Harness.True(state.Observe(location, configLeft, configTop), "应安排落盘");
 
             configLeft = location.X;

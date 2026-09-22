@@ -129,11 +129,11 @@ function Test-PackagingProfile {
         $script:HostConstCache[$key] = $value
         return $value
     }
-    $productName = Get-HostConst 'src/Host/AppPaths.cs' 'ProductName'         # 内部产品标识
-    $displayName = Get-HostConst 'src/Host/AppPaths.cs' 'ProductDisplayName'  # 用户可见品牌名
-    $exeName = Get-HostConst 'src/Host/AppPaths.cs' 'ExecutableFileName'
-    $uninstName = Get-HostConst 'src/Host/AppPaths.cs' 'UninstallerFileName'
-    $taskName = Get-HostConst 'src/Host/Autostart.cs' 'ElevatedTaskName'
+    $productName = Get-HostConst 'src/Core/AppPaths.cs' 'ProductName'         # 内部产品标识
+    $displayName = Get-HostConst 'src/Core/AppPaths.cs' 'ProductDisplayName'  # 用户可见品牌名
+    $exeName = Get-HostConst 'src/Core/AppPaths.cs' 'ExecutableFileName'
+    $uninstName = Get-HostConst 'src/Core/AppPaths.cs' 'UninstallerFileName'
+    $taskName = Get-HostConst 'src/Core/Autostart.cs' 'ElevatedTaskName'
 
     $bad = [System.Collections.Generic.List[string]]::new()
     function Want([string]$what, [bool]$ok, [string]$detail) {
@@ -221,13 +221,29 @@ function Test-Host {
     if (-not $dotnet) { Skip-Layer 'dotnet 不在 PATH（.NET 9 SDK）' }
     $proj = Join-Path $RepoRoot 'src/Host/GenshinFpsUnlocker.Host.csproj'
     if (-not (Test-Path -LiteralPath $proj)) { throw "找不到 $proj" }
+    $coreProj = Join-Path $RepoRoot 'src/Core/HoYoEnhance.Core.csproj'
+    if (-not (Test-Path -LiteralPath $coreProj)) { throw "找不到 $coreProj" }
+    $hostProject = [System.IO.File]::ReadAllText($proj)
+    if ($hostProject -notmatch 'HoYoEnhance\.Core\.csproj') {
+        throw 'Host 工程没有引用 HoYoEnhance.Core'
+    }
+    $coreProject = [System.IO.File]::ReadAllText($coreProj)
+    if ($coreProject -match 'UseWindowsForms|Microsoft\.Web\.WebView2|CommunityToolkit') {
+        throw 'Core 工程引用了 WinForms / WebView2 / Toast 依赖'
+    }
+    $forbidden = Get-ChildItem (Join-Path $RepoRoot 'src/Core') -Filter '*.cs' |
+        Select-String -Pattern 'System\.Windows\.Forms|Microsoft\.Web\.WebView2|CommunityToolkit|IWin32Window' |
+        Select-Object -First 1
+    if ($forbidden) {
+        throw "Core 源码引用了 UI 类型：$($forbidden.Path):$($forbidden.LineNumber)"
+    }
     $r = Invoke-Native -FilePath $dotnet `
         -Arguments @('build', $proj, '-c', 'Release', '-p:EnableWindowsTargeting=true', '--nologo', '-v', 'q') `
         -WorkingDirectory $RepoRoot -Tail 30
     if ($r.ExitCode -ne 0) { throw 'dotnet build 失败' }
     $warnLine = ($r.Output -split "`r?`n" | Where-Object { $_ -match 'Warning' } | Select-Object -First 1)
     if ($warnLine) { return $warnLine.Trim() }
-    return 'Host 构建通过'
+    return 'Host/Core 构建通过，Core 无 WinForms / WebView2 依赖'
 }
 
 function Test-HostTest {

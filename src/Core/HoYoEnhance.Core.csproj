@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- Core 不依赖 WinForms，但注册表、COM、共享内存和 Windows 身份 API 本身是
+         Windows 平台能力；用 windows TFM 让平台分析器保持 0 warning。 -->
+    <TargetFramework>net9.0-windows10.0.18362.0</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>HoYoEnhance.Core</AssemblyName>
+    <RootNamespace>GenshinFpsUnlocker.Host</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Win32.Registry" Version="5.0.0" />
+    <PackageReference Include="System.Security.Principal.Windows" Version="5.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="HoYoEnhance" />
+    <InternalsVisibleTo Include="GenshinFpsUnlocker.Host.Tests" />
+  </ItemGroup>
+</Project>

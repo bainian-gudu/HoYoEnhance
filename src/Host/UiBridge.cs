@@ -30,6 +30,7 @@ internal sealed partial class UiBridge : IDisposable
     private readonly AppConfig _config;
     private readonly UnlockService _service;
     private readonly MainForm _form;
+    private readonly IUserInteraction _interaction;
     private WebView2? _webView;
     private int _saveState; // 0 saved, 1 saving, 2 error
     private bool _disposed;
@@ -44,6 +45,7 @@ internal sealed partial class UiBridge : IDisposable
         _config = config;
         _service = service;
         _form = form;
+        _interaction = new WinFormsUserInteraction(form);
         _service.StateChanged += OnServiceStateChanged;
         // 宿主日志 → 前端日志页的增量推送（前端 native.ts 的 onNativeLog 一直在监听）
         AppLog.EntryLogged += OnAppLogEntry;

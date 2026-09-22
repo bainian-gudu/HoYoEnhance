@@ -101,8 +101,8 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 
 | 事项 | 归属 | 说明 |
 | --- | --- | --- |
-| 快捷方式的**显示名** | `src/Host/ShortcutHelper.cs` | Kachina 按 `shortcutName` 建 `HoYoEnhance.lnk`（桌面 + 开始菜单），宿主每次启动统一主项为 `HoYoEnhance.lnk`、卸载项为 `Uninstall HoYoEnhance.lnk`，并清理重复项；卸载时由 `extraUninstallLnkNames` 补删（见下） |
-| 开机自启 | `src/Host/Autostart.cs` | 按配置项「开机自启动」+「启动时自动以管理员权限运行」同步，两种登记方式二选一：普通权限写 `HKCU\...\Run`，管理员权限登记任务计划程序里的兼容自启任务（`RunLevel=HighestAvailable`，登录不弹 UAC）。卸载时分别由 `packaging.config.json` 的 `extraUninstallRegistry` 与 `extraUninstallScheduledTasks` 交给卸载器回收（见下），不需要用户先手动关闭 |
+| 快捷方式的**显示名** | `src/Core/ShortcutHelper.cs` | Kachina 按 `shortcutName` 建 `HoYoEnhance.lnk`（桌面 + 开始菜单），宿主每次启动统一主项为 `HoYoEnhance.lnk`、卸载项为 `Uninstall HoYoEnhance.lnk`，并清理重复项；卸载时由 `extraUninstallLnkNames` 补删（见下） |
+| 开机自启 | `src/Core/Autostart.cs` | 按配置项「开机自启动」+「启动时自动以管理员权限运行」同步，两种登记方式二选一：普通权限写 `HKCU\...\Run`，管理员权限登记任务计划程序里的兼容自启任务（`RunLevel=HighestAvailable`，登录不弹 UAC）。卸载时分别由 `packaging.config.json` 的 `extraUninstallRegistry` 与 `extraUninstallScheduledTasks` 交给卸载器回收（见下），不需要用户先手动关闭 |
 
 ## 本项目给 Kachina 加 / 改的配置项
 
@@ -124,7 +124,7 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 | `value` | 给了就只删这一个值；省略则**递归删除整个子键**（`remove_tree`），慎用 |
 
 本项目宿主的开机自启写在 `HKCU\...\Run` 的 `HoYoEnhance` 值上
-（`src/Host/Autostart.cs`），所以卸载必须回收它。注意卸载器一般以管理员身份运行，
+（`src/Core/Autostart.cs`），所以卸载必须回收它。注意卸载器一般以管理员身份运行，
 此时 `HKCU` 指向的是管理员账户；因此 `hive: HKCU` 会**额外遍历 `HKEY_USERS`**
 下已加载的用户配置单元（跳过 `*_Classes`、`.DEFAULT`、`S-1-5-18`），
 确保删掉的是登录用户装的那一份。ARP 卸载项仍由上游逻辑按 `regName` 删除，
@@ -139,7 +139,7 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 ```
 
 「开机自启动 + 启动时自动以管理员权限运行」同时开启时，宿主不再写 `HKCU\...\Run`，
-而是在任务计划程序里登记一个最高权限登录任务（`src/Host/Autostart.cs`）。
+而是在任务计划程序里登记一个最高权限登录任务（`src/Core/Autostart.cs`）。
 它不是注册表项、也不是文件，`extraUninstallRegistry` / `extraUninstallPath`
 都覆盖不到，只能靠 `schtasks /Delete /TN <名字> /F` 回收 —— 否则卸载后每次登录
 都会去拉起一个已经不存在的 exe。
@@ -183,7 +183,7 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 ```
 
 这三个目录**不是**历史遗留兜底，而是宿主当前就在用的可写性回退链：
-`src/Host/AppPaths.cs` 的 `DataDirectory` 依次尝试
+`src/Core/AppPaths.cs` 的 `DataDirectory` 依次尝试
 `LocalApplicationData` → `ApplicationData`(Roaming) → `MyDocuments`，
 用**第一个能创建并通过写探测的**目录（`%LOCALAPPDATA%` 被组策略 / ACL /
 漫游配置挡住时就会落到后两个）。所以卸载必须三处都试，否则换了落盘位置的
@@ -266,7 +266,7 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 
 被拒绝的路径只记 `warn` 日志，卸载继续。本项目现有配置全部落在放行范围内。
 
-宿主侧（`src/Host/`）另有一道：程序内「卸载本软件」启动 `uninst.exe` 前会校验
+宿主侧（`src/Core/`）另有一道：程序内「卸载本软件」启动 `uninst.exe` 前会校验
 路径在自身目录内、文件名符合约定、不是符号链接、目录不是系统/配置根目录；
 **宿主已提权时还要求安装目录位于 `Program Files` 下**，否则拒绝启动
 （避免普通用户在可写目录放同名 exe 借管理员令牌执行）。

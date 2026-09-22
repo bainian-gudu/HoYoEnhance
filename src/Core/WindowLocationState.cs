@@ -1,5 +1,8 @@
 namespace GenshinFpsUnlocker.Host;
 
+/// <summary>窗口左上角坐标，不依赖 WinForms 的 Point。</summary>
+internal readonly record struct WindowLocation(int X, int Y);
+
 /// <summary>
 /// 主窗口位置记录的纯状态机：只回答「这次窗口移动算不算用户摆放的位置 /
 /// 有没有还没写进 config.json 的改动」，不碰 WinForms，便于在测试台里覆盖回归场景。
@@ -11,10 +14,10 @@ namespace GenshinFpsUnlocker.Host;
 internal sealed class WindowLocationState
 {
     /// <summary>还没写进配置的位置（null = 没有待落盘改动）。</summary>
-    private Point? _pending;
+    private WindowLocation? _pending;
 
     /// <summary>待落盘的位置；null 表示当前没有需要写盘的改动。</summary>
-    public Point? Pending => _pending;
+    public WindowLocation? Pending => _pending;
 
     /// <summary>
     /// 记录一次窗口位置变化。返回 true 表示位置与已保存值不同，调用方应重新安排一次
@@ -23,7 +26,7 @@ internal sealed class WindowLocationState
     /// 注意判据是「已保存值」而不是内存里的配置对象：调用方通常会先把新位置写进内存配置，
     /// 只比较字段值会让落盘路径误判成「没变化」而永远不写盘。
     /// </summary>
-    public bool Observe(Point location, int? savedLeft, int? savedTop)
+    public bool Observe(WindowLocation location, int? savedLeft, int? savedTop)
     {
         if (savedLeft == location.X && savedTop == location.Y)
         {
