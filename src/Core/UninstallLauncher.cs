@@ -19,7 +19,7 @@ namespace GenshinFpsUnlocker.Host;
 /// </summary>
 internal static class UninstallLauncher
 {
-    /// <summary>Kachina 卸载程序路径；不存在时返回 null。</summary>
+    /// <summary>Kachina 卸载程序路径；不存在（便携版）时返回 null。</summary>
     public static string? FindUninstaller()
     {
         try
@@ -44,7 +44,7 @@ internal static class UninstallLauncher
         if (uninst is null)
         {
             error = "未找到卸载程序：" + AppPaths.UninstExePath +
-                    "。请从安装目录或 Windows「设置 → 应用 → 安装的应用」中卸载；" +
+                    "。便携版没有注册卸载项，直接删除所在目录即可；" +
                     "配置与日志位于用户数据目录。";
             AppLog.Warn("卸载中止: " + error);
             return false;

@@ -1,7 +1,7 @@
 # packaging/ — 安装包配置与打包脚本
 
 本项目的安装 / 卸载 / 更新**只有 Kachina 一种实现**。宿主程序（`src/Host`）本身不动
-文件与注册表，也不解析安装 / 卸载命令行参数。
+文件与注册表，收到 `--install` / `--uninstall` 这类旧参数时只提示用户改用 Kachina。
 
 面向使用者只需要下载根目录 `artifacts\` 中的安装包；本目录供开发者配置和排查安装包。
 **安装器工具链不在这里**：上游 [kachina-installer](https://github.com/YuehaiTeam/kachina-installer)
@@ -11,8 +11,8 @@
 ```text
 packaging/
 ├── README.md               本文件
-├── packaging.config.json   Kachina 配置（安装目录、ARP 名称、协议正文、卸载时清理的数据目录与注册表）
-└── pack.ps1                打包总入口：dist\ → Install.exe
+├── packaging.config.json   Kachina 配置（安装目录、ARP 名称、运行库、协议正文、卸载时清理的数据目录与注册表）
+└── pack.ps1                打包总入口：dist\ → Install.exe / 便携 zip / 便携 7z
 ```
 
 排查时两边对照的位置：
@@ -60,13 +60,15 @@ Windows MSVC / VS Build Tools，完整说明见该仓库的 `README.md`。
 | 文件 | 说明 |
 | --- | --- |
 | `HoYoEnhance.Install.<版本>.exe` | 离线安装器。装完的安装目录里含卸载程序与更新程序 |
+| `HoYoEnhance-portable-win-x64.zip` | 便携包（内含更新程序，可直接升级） |
+| `HoYoEnhance_v<版本>.7z` | 便携 7z（本机检测到 7-Zip 时才生成） |
 
 ## 打包步骤（`pack.ps1` 内部做的事）
 
 `pack.ps1` 按以下三步生成更新器、索引和离线安装器：
 
 ```powershell
-# 1) 更新器（安装目录内用于在线升级）
+# 1) 更新器（也会被塞进便携包，用于在线升级）
 kirara-builder.exe pack -c packaging\packaging.config.json -o <app>\<更新程序>.exe
 
 # 2) 生成 metadata + 分块 hashed 目录
@@ -90,13 +92,10 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 的「安装、更新与卸载」；本文件下面的内容主要用于维护配置和审查删除范围。
 
 **负责**：铺文件到打包配置指定的安装目录、写「应用和功能」卸载项、
-生成 `uninst.exe` / `update.exe`、按 `uacStrategy` 提权、
-安装时创建桌面 + 开始菜单快捷方式（安装界面有勾选项，默认勾上）、
+生成 `uninst.exe` / `update.exe`、按 `runtimes` 装 .NET Desktop Runtime 9 与 VCRedist、
+按 `uacStrategy` 提权、安装时创建桌面 + 开始菜单快捷方式（安装界面有勾选项，默认勾上）、
 卸载时删除这些快捷方式、删除 ARP 注册表项，并按 `userDataPath` 清用户数据
 （配置 / 日志 / WebView2 数据，见下）。
-
-**不装运行库**：单用户基线固定自包含发布，`packaging.config.json` 的 `runtimes`
-为空数组；.NET Desktop Runtime 随 Host 发布，Stub 静态 CRT，不再需要 VCRedist。
 
 **不负责**，由宿主自己维护：
 
@@ -177,14 +176,18 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 
 ```json
 "userDataPath": [
-  "%LOCALAPPDATA%/<用户数据目录名>"
+  "%LOCALAPPDATA%/<用户数据目录名>",
+  "%APPDATA%/<用户数据目录名>",
+  "%USERPROFILE%/Documents/<用户数据目录名>"
 ]
 ```
 
-单用户基线只认 `%LOCALAPPDATA%\<产品名>`：`src/Core/AppPaths.cs` 的
-`DataDirectory` 不再回退到 Roaming AppData 或文档目录，创建或写探测失败时直接报错。
-卸载器仍会按配置把这一条路径重放到所有已加载的用户目录，避免管理员卸载时漏掉
-当初安装软件的普通用户那一份。
+这三个目录**不是**历史遗留兜底，而是宿主当前就在用的可写性回退链：
+`src/Core/AppPaths.cs` 的 `DataDirectory` 依次尝试
+`LocalApplicationData` → `ApplicationData`(Roaming) → `MyDocuments`，
+用**第一个能创建并通过写探测的**目录（`%LOCALAPPDATA%` 被组策略 / ACL /
+漫游配置挡住时就会落到后两个）。所以卸载必须三处都试，否则换了落盘位置的
+用户数据就清不掉。不存在的目录自动跳过。
 
 上游卸载器在这里有两个坑，Kirara 的本地补丁都填了（详见其 `LOCAL_PATCHES.md`
 第 6 节）：
@@ -214,7 +217,9 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
   否则它自己的 exe、`logs\` 与 WebView2 的 `EBWebView` 缓存都被占用，删不掉就是残留。
   拒绝结束进程则整个卸载不执行，回到卸载界面。`silent` / `non_interactive` 直接结束。
 
-**已知不覆盖**：WebView2 的 `EBWebView` 目录与凭据管理器条目本项目不产生，未处理。
+**已知不覆盖**：被 OneDrive 重定向过的 `Documents` / `AppData`
+（重定向后的真实位置不在 `ProfileList` 的 `ProfileImagePath` 里）只能命中当前进程
+用户那一份；WebView2 的 `EBWebView` 目录与凭据管理器条目本项目不产生，未处理。
 
 ### `agreementFile` / `agreementFormat` / `agreementTitle` — 可配置的用户协议
 

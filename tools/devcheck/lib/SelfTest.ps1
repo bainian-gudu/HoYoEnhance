@@ -105,38 +105,6 @@ jobs:
         -Run { Test-PackagingProfile } `
         -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $profile) -Path $profile }
 
-    # --- 5b) packaging：Host 重新退回依赖本机 .NET Desktop Runtime 就必须报错 ---
-    $rootBuild = Join-Path $RepoRoot 'build.ps1'
-    Add-Case 'packaging 层能抓到 Host 不再自包含发布' `
-        -Mutate {
-            $text = [System.IO.File]::ReadAllText($rootBuild)
-            $broken = $text.Replace('"--self-contained", "true"', '"--self-contained", "false"')
-            if ($broken -eq $text) { throw '注入失败：build.ps1 里没有 self-contained 的当前取值' }
-            [System.IO.File]::WriteAllText($rootBuild, $broken)
-        } `
-        -Run { Test-PackagingProfile } `
-        -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $rootBuild) -Path $rootBuild }
-
-    # --- 5c) packaging：安装器重新安装 .NET / VCRedist 就必须报错 ---
-    Add-Case 'packaging 层能抓到运行库安装包被加回来' `
-        -Mutate {
-            $text = [System.IO.File]::ReadAllText($profile)
-            $broken = $text.Replace('"runtimes": []', '"runtimes": ["Microsoft.DotNet.DesktopRuntime.9"]')
-            if ($broken -eq $text) { throw '注入失败：packaging.config.json 里没有空的 runtimes' }
-            [System.IO.File]::WriteAllText($profile, $broken)
-        } `
-        -Run { Test-PackagingProfile } `
-        -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $profile) -Path $profile }
-
-    # --- 5d) packaging：便携包分支被加回来就必须报错 ---
-    Add-Case 'packaging 层能抓到便携包分支被加回来' `
-        -Mutate {
-            $text = [System.IO.File]::ReadAllText($packScript)
-            [System.IO.File]::WriteAllText($packScript, $text + "`nCompress-Archive -Path x -DestinationPath y`n")
-        } `
-        -Run { Test-PackagingProfile } `
-        -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $packScript) -Path $packScript }
-
     # --- 6) hosttest：把 ProcessRunner 超时路径上的 KillTree 拿掉 ---
     #      只注入一个能编过的行为错误（少杀进程树，而不是改标记或提前 return，
     #      后两者会带 CS0162 噪音或者只在特定断言上暴露）。

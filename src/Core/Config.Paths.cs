@@ -31,7 +31,26 @@ internal sealed partial class AppConfig
 
     private static void EnsureDataDirectory()
     {
-        PathUtil.EnsureDir(AppPaths.DataDirectory);
+        try
+        {
+            PathUtil.EnsureDir(AppPaths.DataDirectory);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn("EnsureDataDirectory: " + ex.Message);
+            // 回退：用户文档下的旁路（极少见 LocalAppData 不可写）
+            try
+            {
+                var fallback = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+                    AppPaths.ProductName);
+                PathUtil.EnsureDir(fallback);
+            }
+            catch
+            {
+                throw new IOException("无法创建配置目录: " + AppPaths.DataDirectory, ex);
+            }
+        }
     }
 
 }

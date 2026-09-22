@@ -193,7 +193,11 @@ internal sealed partial class UiBridge
         SetBool(profileEl, "antiBlurDiveMosaic", v => profile.AntiBlurDiveMosaic = v);
         SetBool(profileEl, "hideUid", v => profile.HideUid = v);
 
-        if (profileEl.TryGetProperty("gamePath", out var pathElement) && pathElement.ValueKind == JsonValueKind.String)
+        // 兼容更早的扁平字段名：gamePathHint
+        var pathElement = profileEl.TryGetProperty("gamePath", out var gp)
+            ? gp
+            : profileEl.TryGetProperty("gamePathHint", out var gph) ? gph : default;
+        if (pathElement.ValueKind == JsonValueKind.String)
         {
             var text = pathElement.GetString();
             profile.GamePath = string.IsNullOrWhiteSpace(text) ? null : text;

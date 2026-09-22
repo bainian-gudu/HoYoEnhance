@@ -122,7 +122,6 @@ function Restore-RepoFile {
 $script:SelfTestRepoFiles = @(
     '.github/workflows/zz-devcheck-selftest.yml',
     '.github/workflows/build.yml',
-    'build.ps1',
     'packaging/pack.ps1',
     'packaging/packaging.config.json',
     'src/Contracts/UiConfigContract.cs',

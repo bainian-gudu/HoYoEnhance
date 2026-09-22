@@ -29,9 +29,9 @@
 ## 要求
 
 - **运行**：64 位 **Windows 10**（1607 / 14393 及以上）或 **Windows 11**，x64；
-  .NET 9 已随主程序自包含发布，只需要系统提供
-  **Microsoft Edge WebView2 Runtime**（Win10/11 通常已自带）。
-  **不需要** .NET Desktop Runtime、VC++ 或 Node / Python 等运行时，
+  需要 **Microsoft Edge WebView2 Runtime**（Win10/11 通常已自带），
+  **.NET Desktop Runtime 9** 与 **VC++ 2015+ x64** 由安装器按配置检测/安装
+  （亦可首次运行时由主程序提示下载）。**不需要** Node / Python 等开发运行时，
   逐项见下文「依赖说明」。
 - **构建**：.NET 9 SDK、CMake、MSVC（或 VS Build Tools）、Node.js 20+；
   打安装器另需 Rust nightly + `rust-src` 与 pnpm 10（源码随仓库提供，CI 会自动装）。
@@ -39,12 +39,13 @@
 ## 快速使用
 
 1. 从 Releases 下载最新 HoYoEnhance 安装包，运行安装器并选择安装目录。
-2. 首次启动时若系统缺少 WebView2，按提示安装官方 Evergreen Runtime。
+2. 首次启动时按提示安装缺少的 .NET Desktop Runtime、VC++ 或 WebView2 运行库。
 3. 在「游戏设置」中启用帧率解锁并选择目标 FPS（星铁为注册表 120 帧）；启动游戏后保持程序运行即可自动应用。
 4. 关闭或最小化窗口会进入系统托盘，左键托盘图标可恢复窗口。
 
 安装器会创建开始菜单快捷方式、可选的桌面快捷方式和卸载项。卸载时可选择是否同时删除
-配置、日志和 WebView2 缓存；不删除用户数据时，重新安装仍会沿用原设置。
+配置、日志和 WebView2 缓存；不删除用户数据时，重新安装仍会沿用原设置。便携版直接运行
+压缩包内的 HoYoEnhance 主程序，退出程序后删除整个目录即可。
 
 ## 技术栈
 
@@ -65,8 +66,9 @@
 本地构建默认按需从 Kirara 源码构建，CI 直接下载它的最新 Release 产物。本仓库的
 打包配置与脚本集中在 [`packaging/`](packaging/)。
 
-> 说明：当前主程序、安装包、快捷方式、界面与窗口标题统一为 **HoYoEnhance**。
-> 单用户基线不再保留旧品牌迁移与旧安装残留清理；从旧版升级前请先卸载旧版。
+> 说明：当前主程序、安装包、便携包、快捷方式、界面与窗口标题统一为 **HoYoEnhance**。
+> 为兼容老用户升级与卸载，数据目录、卸载注册表键、IPC / 自启动任务等内部标识仍保留
+> 历史值；安装器会识别旧安装目录与旧文件名，并在升级时清理旧组件、重定向快捷方式。
 
 ### 常用命令
 
@@ -84,8 +86,8 @@
 .\build.ps1 -SkipBuilderBuild
 .\build.ps1 -KiraraRepo D:\src\Kirara
 
-# 主程序固定自包含发布（-SelfContained 参数仅为兼容现有 CI 输入保留）
-.\build.ps1 -Configuration Release
+# 可选：主程序也自包含
+.\build.ps1 -Configuration Release -SelfContained
 ```
 
 只修改前端时可在 `src/Ui` 执行 `npm ci` 后运行 `npm run build`；只修改安装器前端时，
@@ -103,10 +105,12 @@ dist\StarRailStub.dll
 dist\ui\index.html
 
 artifacts\HoYoEnhance.Install.<版本>.exe              # Kachina 离线安装器
+artifacts\HoYoEnhance-portable-win-x64.zip            # 便携包（含更新程序）
+artifacts\HoYoEnhance_v<版本>.7z                      # 便携 7z（本机有 7-Zip 时）
 ```
 
 打包配置见 [`packaging/packaging.config.json`](packaging/packaging.config.json)
-（默认安装目录、GitHub 在线源；`runtimes` 为空，Host 已自包含）。
+（默认安装目录、GitHub 在线源、运行库列表）。
 上游源码快照的来源、版本与构建前置见 Kirara 的 `UPSTREAM.md`。
 
 ## 开发自检（devcheck）
@@ -138,7 +142,7 @@ pwsh tools/devcheck/devcheck.ps1 -SelfTest       # 注入错误，确认每层�
 - 可选安装目录
 - 安装时按 UAC 策略提权；装完后日常运行与开机自启不再弹 UAC
   （勾上「启动时自动以管理员权限运行」时，登录自启改由任务计划程序登记的最高权限任务拉起）
-- 不再安装 .NET Desktop Runtime / VCRedist：Host 自包含，Stub 静态 CRT
+- 可自动处理 .NET Desktop Runtime 9 / VCRedist（见配置 `runtimes`）
 - 安装目录生成 **卸载程序**、**更新程序**
 - 安装界面「我已阅读并同意 **用户协议**」可点击，弹窗显示协议全文
   （正文由 `kachina.config.json` 的 `agreementFile` 指向仓库根 `USER_AGREEMENT.txt`，
@@ -148,16 +152,16 @@ pwsh tools/devcheck/devcheck.ps1 -SelfTest       # 注入错误，确认每层�
 卸载（四个入口，最终都是同一个 Kachina 卸载器）：
 
 - 程序内：设置页「高级设置 → 卸载 → 卸载本软件」，或关于页底部的「卸载本软件」
-  （弹窗确认后拉起 `uninst.exe` 并退出主程序）
+  （弹窗确认后拉起 `uninst.exe` 并退出主程序；便携版没有 `uninst.exe`，会提示直接删目录）
 - 安装目录下的 **卸载程序**
-- 开始菜单里的「Uninstall HoYoEnhance」快捷方式（指向上面那个程序）
+- 开始菜单里的「Uninstall HoYoEnhance」快捷方式（指向上面那个程序；便携目录没有卸载程序时不再创建）
 - Windows「设置 → 应用 → 安装的应用」/ 控制面板「应用和功能」（Kachina 写的 ARP 卸载项）
 
 卸载时会一并处理：
 
 - **勾选「同时删除用户数据」** → 删用户数据目录（配置、日志、
-  `EBWebView` 界面缓存，即 `%LOCALAPPDATA%\HoYoEnhance`），外加 `%TEMP%` 里安装期的
-  残留（按固定文件名白名单）。**不勾选则一个数据目录都不碰**，
+  `EBWebView` 界面缓存）与 `%AppData%\`、`文档\` 下的对应目录，覆盖本机**所有登录过的
+  用户**，外加 `%TEMP%` 里安装期的残留（按固定文件名白名单）。**不勾选则一个数据目录都不碰**，
   只删快捷方式与开始菜单里的产品文件夹；重装后可沿用原设置。
 - 主程序还在运行时（常驻托盘很常见）会先询问并结束进程，否则文件被占用删不掉。
 - 开机自启项与快捷方式（含当前快捷方式与历史快捷方式名）按配置一并删除，**不需要先手动关自启动**：
@@ -166,6 +170,7 @@ pwsh tools/devcheck/devcheck.ps1 -SelfTest       # 注入错误，确认每层�
 - 所有「按配置删除」的通道都有安全阀（共享注册表容器不整棵删、路径必须绝对且不在系统目录内、
   不碰盘符根与 `Program Files` 这类受保护目录），命中的只记日志并跳过，不会让卸载失败。
 
+已知边界：被 OneDrive 重定向过的 `文档` / `AppData` 只能命中当前用户那一份。
 逐条实现与断言见 Kirara 的 `LOCAL_PATCHES.md` 第 3、6 节与
 [`packaging/README.md`](packaging/README.md)。
 
@@ -178,8 +183,8 @@ pwsh tools/devcheck/devcheck.ps1 -SelfTest       # 注入错误，确认每层�
 | 应用托管程序集 / 资源 | 打进安装包 |
 | `FpsUnlockerStub.dll` / `StarRailStub.dll` + MinHook | 打进安装包；CRT **静态链接**（/MT） |
 | 安装器 / 卸载器 / 更新器 | **Kachina**（`Install` / `uninst` / `update`） |
-| .NET Desktop Runtime 9 x64 | **已随 Host 自包含发布**，不再由安装器处理 |
-| VC++ 2015+ x64 | **不需要**（Stub 静态 CRT） |
+| .NET Desktop Runtime 9 x64 | 安装器 `runtimes`；亦可首次运行提示 |
+| VC++ 2015+ x64 | 安装器 `runtimes`（通常 Stub 已静态 CRT） |
 | Node / Python 等 | **不需要、不安装** |
 
 ## 配置
@@ -187,7 +192,7 @@ pwsh tools/devcheck/devcheck.ps1 -SelfTest       # 注入错误，确认每层�
 - 路径：用户数据目录下的 `config.json`
 - 原子写入（临时文件 + `File.Replace`）并保留 `config.json.bak`
 - 主文件损坏时自动从 `.bak` / 临时文件恢复
-- 数据目录固定为 `%LOCALAPPDATA%\HoYoEnhance`（单用户基线，不再回退到其它目录）
+- 若 LocalAppData 不可写，依次尝试 AppData、文档目录
 
 ## 运行行为
 
@@ -249,8 +254,8 @@ CI 的安装器工具链**只从独立项目 Kirara 的最新 Release 下载** `
 [`tools/devcheck/README.md`](tools/devcheck/README.md)。
 
 **Build** 依次跑 `build-builder`（下载 Kirara 最新 Release 的 `kirara-builder.exe`）→
-`build-app` → `pack`。工作流保留原 `host_mode` 输入，但当前单用户基线无论选哪种
-都发布自包含主程序；产物与本地构建一致，挂在 Release 上。把 `Install` 包发布到 Release 且 tag 为 `v{version}` 后，
+`build-app` → `pack`，可选 `host_mode=self-contained` 打全量自包含主程序；产物与本地
+构建一致，挂在 Release 上。把 `Install` 包发布到 Release 且 tag 为 `v{version}` 后，
 配置里的 GitHub 在线源即可用于更新器。
 
 ## 隐私与遥测
@@ -271,10 +276,11 @@ CI 的安装器工具链**只从独立项目 Kirara 的最新 Release 下载** `
 
 - **安装 / 更新**：从 GitHub Releases 下载安装包（地址见
   `packaging/packaging.config.json` 的 `source`）。
-- **缺失的 WebView2**：`go.microsoft.com/fwlink/p/`（WebView2 引导器）；
-  .NET 已自包含，不再下载 Desktop Runtime / VC++。
-- **主程序运行期不联网**：帧率解锁与画面注入全部在本地完成；检测到缺 WebView2 时只弹
-  提示，经确认后用系统浏览器打开微软官方下载页（`src/Host/WebView2Prerequisite.cs`）。
+- **缺失的运行库**：`builds.dotnet.microsoft.com`（.NET Desktop Runtime 9）、
+  `aka.ms/vs/17/release/vc_redist.x64.exe`（VC++ 运行库）、
+  `go.microsoft.com/fwlink/p/`（WebView2 引导器）。
+- **主程序运行期不联网**：帧率解锁与画面注入全部在本地完成；检测到缺运行库时只弹
+  提示，经确认后用系统浏览器打开微软官方下载页（`src/Host/RuntimePrerequisite.cs`）。
 - 本地日志与配置写在用户数据目录，不上传。
 
 删除清单、保留项（`InfoFilter`、本地耗时统计 `networkInsights.ts`）与 lock 重新生成的
@@ -299,13 +305,13 @@ CI 的安装器工具链**只从独立项目 Kirara 的最新 Release 下载** `
 ### 安装 / 卸载会动到哪些东西
 
 - **安装写入**：安装目录、桌面与开始菜单的快捷方式、开机自启动项（`HKCU\...\Run` 或
-  最高权限计划任务）、「应用和功能」里的卸载信息；不再安装 .NET / VC++，只有系统
-  缺少 WebView2 时才提示安装。
+  最高权限计划任务）、「应用和功能」里的卸载信息，以及 .NET / VC++ / WebView2
+  运行环境（缺失时才装）。
 - **卸载删除**：上面这些，外加你在卸载时勾选的用户数据目录。系统目录、其他软件、
   以及与其他软件共用的注册表容器（开机启动项、卸载信息等）**只删本软件自己的那一份**，
   不会整棵删掉；碰到可疑路径一律跳过并写进日志，不会因为安全检查让卸载失败。
-- **下载的运行环境安装包**：仅 WebView2 引导器；落地在只有管理员可写的目录、
-  文件名随机不可预测、运行前验证微软签名 —— 签名无效或签名者不是微软就删掉文件并提示手动下载。
+- **下载的运行环境安装包**：落地在只有管理员可写的目录、文件名随机不可预测、运行前
+  验证微软签名 —— 签名无效或签名者不是微软就删掉文件并提示手动下载。
 - **安装器与提权进程之间的通道**：只允许本用户、SYSTEM 与管理员访问，其他本地程序
   （包括沙箱进程）连不进来。
 - 逐条实现记录（面向开发者）见 Kirara 的 `LOCAL_PATCHES.md`。
