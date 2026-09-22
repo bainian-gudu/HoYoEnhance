@@ -17,6 +17,7 @@ internal static class Program
         ConfigExportTests.Run(harness);
         ConfigContractTests.Run(harness);
         WindowTrayPolicyTests.Run(harness);
+        WindowSizePolicyTests.Run(harness);
         return harness.Report();
     }
 }

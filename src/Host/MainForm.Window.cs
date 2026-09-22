@@ -35,17 +35,25 @@ internal sealed partial class MainForm : Form
     {
         try
         {
-            var minimum = LogicalToDeviceUnits(MinimumLogicalSize);
-            // 小屏 + 高缩放时逻辑最小尺寸可能比屏幕还大：这时退到工作区大小，
-            // 宁可让界面走 CSS 的窄窗降级，也不要出现拖不到、装不下的窗口。
             var work = (Screen.FromControl(this) ?? Screen.PrimaryScreen)?.WorkingArea ?? Rectangle.Empty;
-            if (work.Width > 0) minimum.Width = Math.Min(minimum.Width, work.Width);
-            if (work.Height > 0) minimum.Height = Math.Min(minimum.Height, work.Height);
-            MinimumSize = minimum;
-            if (!resetSize) return;
+            var desired = resetSize
+                ? LogicalToDeviceUnits(DefaultLogicalSize)
+                : new Size(Math.Max(1, Width), Math.Max(1, Height));
+            var minimum = LogicalToDeviceUnits(MinimumLogicalSize);
+            var plan = WindowSizePolicy.FitToWorkArea(
+                new WindowDimensions(desired.Width, desired.Height),
+                new WindowDimensions(minimum.Width, minimum.Height),
+                work.Width,
+                work.Height);
 
-            var target = LogicalToDeviceUnits(DefaultLogicalSize);
-            Size = new Size(Math.Max(target.Width, minimum.Width), Math.Max(target.Height, minimum.Height));
+            MinimumSize = new Size(plan.Minimum.Width, plan.Minimum.Height);
+            Size = new Size(plan.Target.Width, plan.Target.Height);
+
+            // 首次显示且没有历史位置时主动居中；StartPosition=CenterScreen 在
+            // 尺寸被 DPI / 工作区裁剪后偶尔会留下偏差，这里显式落一次坐标。
+            if (resetSize && !_startupTrayPending && !TryGetSavedWindowLocation(out _))
+                CenterOnWorkArea(work);
+
             if (_hasRestoreLocation) CaptureRestoreLocation();
             AppLog.Info($"window size (dpi {DeviceDpi}): min={MinimumSize}, size={Size}");
         }
@@ -330,11 +338,8 @@ internal sealed partial class MainForm : Form
                     else if (Location.X < -1000 || Location.Y < -1000)
                     {
                         StartPosition = FormStartPosition.CenterScreen;
-                        // 触发一次居中：先放到工作区中心
                         var screen = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1280, 800);
-                        Location = new Point(
-                            screen.Left + Math.Max(0, (screen.Width - Width) / 2),
-                            screen.Top + Math.Max(0, (screen.Height - Height) / 2));
+                        CenterOnWorkArea(screen);
                     }
                 }
                 catch { /* ignore */ }
@@ -411,11 +416,16 @@ internal sealed partial class MainForm : Form
             Height >= MinimumSize.Height / 2;
         if (on) return;
 
-        var target = LogicalToDeviceUnits(DefaultLogicalSize);
-        Width = Math.Min(target.Width, wa.Width - 40);
-        Height = Math.Min(target.Height, wa.Height - 40);
-        Left = wa.Left + Math.Max(0, (wa.Width - Width) / 2);
-        Top = wa.Top + Math.Max(0, (wa.Height - Height) / 2);
+        var desired = LogicalToDeviceUnits(DefaultLogicalSize);
+        var minimum = LogicalToDeviceUnits(MinimumLogicalSize);
+        var plan = WindowSizePolicy.FitToWorkArea(
+            new WindowDimensions(desired.Width, desired.Height),
+            new WindowDimensions(minimum.Width, minimum.Height),
+            wa.Width,
+            wa.Height);
+        MinimumSize = new Size(plan.Minimum.Width, plan.Minimum.Height);
+        Size = new Size(plan.Target.Width, plan.Target.Height);
+        CenterOnWorkArea(wa);
         AppLog.Warn($"EnsureOnScreen reset bounds → {Bounds}");
     }
 
@@ -448,10 +458,26 @@ internal sealed partial class MainForm : Form
         }
 
         var screen = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1280, 800);
-        _restoreLocation = new Point(
-            screen.Left + Math.Max(0, (screen.Width - Width) / 2),
-            screen.Top + Math.Max(0, (screen.Height - Height) / 2));
+        _restoreLocation = GetCenteredLocation(screen);
         _hasRestoreLocation = true;
+    }
+
+    private void CenterOnWorkArea(Rectangle work)
+    {
+        if (work.Width <= 0 || work.Height <= 0) return;
+        StartPosition = FormStartPosition.Manual;
+        Location = GetCenteredLocation(work);
+    }
+
+    private Point GetCenteredLocation(Rectangle work)
+    {
+        var position = WindowSizePolicy.CenterInWorkArea(
+            new WindowDimensions(Width, Height),
+            work.Left,
+            work.Top,
+            work.Width,
+            work.Height);
+        return new Point(position.X, position.Y);
     }
 
     /// <summary>
