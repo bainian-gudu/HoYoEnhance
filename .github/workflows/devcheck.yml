@@ -85,7 +85,7 @@ jobs:
         run: pwsh -NoProfile -File ./tools/devcheck/devcheck.ps1 -SelfTest
 
       # Web UI 构建不在 all 里（要先 npm ci），这里单独跑；只在 ubuntu 上跑，省时间
-      - name: Web UI build
+      - name: Web UI lint, tests, build
         if: runner.os == 'Linux'
         shell: pwsh
         run: |

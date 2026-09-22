@@ -1,47 +1,18 @@
 import type { ChangeEvent } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { PAGE_NAMES, isGamePage } from '../lib/nav';
 import type { ToastItem } from '../components/ui';
-import type { GameId, GameProfile, LogEntry, LogLevel, Page, Theme, UnlockerConfig } from '../lib/config';
+import type { GameId, GameProfile, LogEntry, LogLevel, UnlockerConfig } from '../lib/config';
 import {
   APP_NAME, CONFIG_LABELS, GAME_CONFIG_LABELS, GAME_IDS, GAME_META, STORAGE_KEY,
-  createDefaultConfig, downloadFile, getPage, isGameId, loadConfig, makeLog, parseConfig,
+  createDefaultConfig, downloadFile, isGameId, loadConfig, makeLog, parseConfig,
 } from '../lib/config';
-import { clearKeyboardFocus, clearTabFocus, markKeyboardFocus } from '../lib/focus';
+import { mergePendingPatch, mergeQueuedPatch } from '../lib/configPatch';
 import type { AutostartState, NativeState } from '../lib/native';
-import { isNativeHost, nativeGetBootstrap, nativeInvoke, onNativeLog, onNativeNavigate, onNativeState } from '../lib/native';
+import { isNativeHost, nativeGetBootstrap, nativeInvoke, onNativeLog, onNativeState } from '../lib/native';
+import { useAppChrome } from './useAppChrome';
 
 export type ModalType = 'path' | 'safety' | 'launch' | 'reset' | 'clearLogs' | 'uninstall' | null;
 export type LaunchState = 'idle' | 'launching' | 'running';
-
-/**
- * 把「还没下发到宿主的本地改动」叠加到宿主推来的配置上。
- *
- * 宿主的 state 是它此刻知道的配置，pendingPatch 是用户刚改、还没生效的意图。节流窗口
- * （帧率 350ms、其它 80ms）内到达的状态推送必须让后者赢，否则帧率滑块与开关会被打回
- * 旧值、几百毫秒后再跳回来。只保护 activeGame 是不够的 —— 那只是其中一种字段。
- */
-function mergePendingPatch(config: UnlockerConfig, patch: Record<string, unknown>): UnlockerConfig {
-  const keys = Object.keys(patch).filter((key) => key !== 'games' && key in config);
-  const hasGames = patch.games !== undefined;
-  if (!keys.length && !hasGames) return config;
-
-  const next: Record<string, unknown> = { ...config };
-  for (const key of keys) next[key] = patch[key];
-
-  if (hasGames) {
-    const games: Record<GameId, GameProfile> = { ...config.games };
-    const incoming = patch.games;
-    if (typeof incoming === 'object' && incoming !== null) {
-      for (const [id, values] of Object.entries(incoming as Record<string, unknown>)) {
-        if (!isGameId(id) || typeof values !== 'object' || values === null) continue;
-        games[id] = { ...games[id], ...(values as Partial<GameProfile>) };
-      }
-    }
-    next.games = games;
-  }
-  return next as unknown as UnlockerConfig;
-}
 
 /**
  * 应用级状态与动作：配置 / 日志 / 主题 / 导航 / 原生桥（WebView2）以及全部交互回调。
@@ -53,12 +24,7 @@ export function useAppState() {
   const [initial] = useState(() => (native ? { config: createDefaultConfig(), recovered: false } : loadConfig()));
   const [config, setConfig] = useState<UnlockerConfig>(initial.config);
   const configRef = useRef(config);
-  configRef.current = config;
-  const [page, setPage] = useState<Page>(getPage);
-  const [theme, setTheme] = useState<Theme>(() => {
-    try { return localStorage.getItem('genshin-fps-unlocker.theme') === 'dark' ? 'dark' : 'light'; } catch { return 'light'; }
-  });
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  useEffect(() => { configRef.current = config; }, [config]);
   const [modal, setModal] = useState<ModalType>(null);
   // 路径 / 启动对话框针对哪个游戏（游戏库里可以直接给另一个游戏设路径、启动它）。
   const [modalGame, setModalGame] = useState<GameId>(initial.config.activeGame);
@@ -76,7 +42,7 @@ export function useAppState() {
   ));
   const [launchState, setLaunchState] = useState<LaunchState>('idle');
   const launchStateRef = useRef<LaunchState>(launchState);
-  launchStateRef.current = launchState;
+  useEffect(() => { launchStateRef.current = launchState; }, [launchState]);
   const [statusText, setStatusText] = useState('准备中');
   // 运行状态按游戏归属：宿主只有一个共享内存槽位，同时只服务一款游戏。
   // runningGame 是当前检测到在跑的游戏，attachedGame 是真正注入了 Stub 的那款；
@@ -87,7 +53,9 @@ export function useAppState() {
   // （用户保存的选择）可能不同。切到未运行的游戏才两者一起改；游戏退出只回退展示。
   const [displayGame, setDisplayGame] = useState<GameId>(initial.config.activeGame);
   const displayGameRef = useRef(displayGame);
-  displayGameRef.current = displayGame;
+  useEffect(() => { displayGameRef.current = displayGame; }, [displayGame]);
+  const { page, theme, setTheme, sidebarOpen, setSidebarOpen, sidebarRef, navigate } =
+    useAppChrome({ native, displayGame, modalOpen: modal !== null });
   const [attachedPid, setAttachedPid] = useState(0);
   const [currentFps, setCurrentFps] = useState(0);
   // Stub 反馈：生命周期状态、错误码与两项注入功能的就绪位掩码（概览页运行状态卡用）
@@ -101,7 +69,6 @@ export function useAppState() {
   const [autostart, setAutostart] = useState<AutostartState>({ mode: 'disabled', notice: null });
   const [version, setVersion] = useState('1.0.0');
   const importRef = useRef<HTMLInputElement>(null);
-  const sidebarRef = useRef<HTMLElement>(null);
   // 每个游戏各自记录上一次已播报的目标帧率，避免切换游戏时误报「帧率已调整」。
   const previousFps = useRef<Record<GameId, number>>({
     genshin: config.games.genshin.targetFps,
@@ -121,12 +88,6 @@ export function useAppState() {
     setToasts((previous) => [...previous.slice(-2), { id: ++toastId.current, title, description, type }]);
   }, []);
   const dismissToast = useCallback((id: number) => setToasts((previous) => previous.filter((toast) => toast.id !== id)), []);
-  const navigate = useCallback((next: Page) => {
-    setPage(next);
-    setSidebarOpen(false);
-    window.location.hash = next;
-    window.scrollTo({ top: 0, behavior: 'auto' });
-  }, []);
 
   const applyNativeState = useCallback((state: NativeState) => {
     // 用户刚手动切过游戏时，宿主在收到 patch 之前推送的旧状态不能把选择覆盖回去。
@@ -199,117 +160,6 @@ export function useAppState() {
     return () => { cancelled = true; offState(); offLog(); };
   }, [native, applyNativeState, addLog, notify]);
 
-  useEffect(() => {
-    const onHashChange = () => { setPage(getPage()); setSidebarOpen(false); window.scrollTo({ top: 0, behavior: 'auto' }); };
-    window.addEventListener('hashchange', onHashChange);
-    return () => window.removeEventListener('hashchange', onHashChange);
-  }, []);
-
-  // 主界面不参与 Tab 焦点遍历：按下 Tab 直接吞掉，焦点不移动、界面没有任何反应。
-  // 键盘焦点标记（focus-visible 外框）改由标签页方向键这类显式键盘操作触发；
-  // 鼠标点击、失焦和隐藏窗口仍会清掉标记。
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Tab') return;
-      // 捕获阶段就拦下：既不移动焦点，也不让对话框 / 抽屉的 Tab 圈定逻辑收到这次按键
-      event.preventDefault();
-      event.stopPropagation();
-    };
-    const onPointerDown = () => clearKeyboardFocus();
-    const onVisibilityChange = () => {
-      if (document.visibilityState !== 'hidden') return;
-      clearKeyboardFocus();
-      clearTabFocus();
-    };
-    const onWindowBlur = () => {
-      clearKeyboardFocus();
-      clearTabFocus();
-    };
-    // 重获焦点时若活动元素仍命中 :focus-visible（说明这次聚焦来自键盘，例如标签页
-    // 方向键），补回 keyboard-focus 标记；鼠标点击聚焦的 button/a 不匹配
-    // :focus-visible，不会误标；文本类输入控件点击时也命中 :focus-visible，显式排除。
-    const onWindowFocus = () => {
-      const el = document.activeElement;
-      if (el instanceof HTMLElement
-        && !el.matches('input, textarea, select')
-        && el.matches(':focus-visible')) markKeyboardFocus();
-    };
-    window.addEventListener('keydown', onKeyDown, true);
-    window.addEventListener('pointerdown', onPointerDown, true);
-    window.addEventListener('blur', onWindowBlur);
-    window.addEventListener('focus', onWindowFocus);
-    document.addEventListener('visibilitychange', onVisibilityChange);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown, true);
-      window.removeEventListener('pointerdown', onPointerDown, true);
-      window.removeEventListener('blur', onWindowBlur);
-      window.removeEventListener('focus', onWindowFocus);
-      document.removeEventListener('visibilitychange', onVisibilityChange);
-    };
-  }, []);
-
-  // 宿主在窗口进托盘（最小化 / 关窗）时发 navigate，把界面复位到「游戏概览」：
-  // 下次从托盘打开主界面不会还停在上次浏览的页面。
-  useEffect(() => {
-    if (!native) return;
-    const offNavigate = onNativeNavigate((next) => {
-      clearKeyboardFocus();
-      clearTabFocus();
-      navigate(next);
-    });
-    return () => { offNavigate(); };
-  }, [native, navigate]);
-
-  useEffect(() => {
-    if (!sidebarOpen) return;
-    const query = window.matchMedia('(max-width: 560px)');
-    if (!query.matches) { setSidebarOpen(false); return; }
-    const previousFocus = document.activeElement as HTMLElement | null;
-    const previousOverflow = document.body.style.overflow;
-    const pane = document.querySelector<HTMLElement>('.main-pane');
-    if (pane) pane.inert = true;
-    document.body.style.overflow = 'hidden';
-    const frame = requestAnimationFrame(() => sidebarRef.current?.querySelector<HTMLElement>('.nav-item.active')?.focus());
-    const onResize = () => { if (!query.matches) setSidebarOpen(false); };
-    const onTab = (event: KeyboardEvent) => {
-      if (event.key !== 'Tab') return;
-      const elements = Array.from(sidebarRef.current?.querySelectorAll<HTMLElement>('a[href], button') ?? [])
-        .filter((element) => element.getClientRects().length > 0);
-      const first = elements[0];
-      const last = elements[elements.length - 1];
-      if (!first) return;
-      if (!sidebarRef.current?.contains(document.activeElement)) { event.preventDefault(); first.focus(); }
-      else if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-    };
-    query.addEventListener('change', onResize);
-    document.addEventListener('keydown', onTab);
-    return () => {
-      cancelAnimationFrame(frame);
-      if (pane) pane.inert = false;
-      document.body.style.overflow = previousOverflow;
-      query.removeEventListener('change', onResize);
-      document.removeEventListener('keydown', onTab);
-      if (previousFocus?.isConnected) previousFocus.focus();
-    };
-  }, [sidebarOpen]);
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#121319' : '#f5f5f8');
-    try { localStorage.setItem('genshin-fps-unlocker.theme', theme); } catch { /* ignore */ }
-    // 桌面宿主：标题栏 / 窗体底色与 UI 深浅一致（Win11 caption color）
-    if (native) {
-      void nativeInvoke('setUiTheme', { theme }).catch(() => undefined);
-    }
-  }, [theme, native]);
-
-  useEffect(() => {
-    // 每个游戏一份的页面把游戏名带进标题，方便在任务栏与窗口列表里区分。
-    const scope = isGamePage(page) ? ` · ${GAME_META[displayGame].short}` : '';
-    document.title = `${PAGE_NAMES[page]}${scope} | ${APP_NAME}`;
-  }, [page, displayGame]);
-
   // 仅网页预览（非宿主）模式：将配置持久化到 localStorage
   useEffect(() => {
     if (native) return;
@@ -337,28 +187,9 @@ export function useAppState() {
     return () => clearTimeout(timer);
   }, [config.games, addLog]);
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement;
-      if (target.matches('input, textarea, select') || target.isContentEditable || modal) return;
-      if ((event.ctrlKey || event.metaKey) && event.key === ',') { event.preventDefault(); navigate('settings'); }
-      if (event.key === 'Escape') setSidebarOpen(false);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [modal, navigate]);
-
   /** 合并待下发的 patch：共享键直接覆盖，游戏键按 games[game] 深合并。 */
   const queuePatch = useCallback((patch: Record<string, unknown>) => {
-    const merged: Record<string, unknown> = { ...pendingPatch.current, ...patch };
-    if (patch.games) {
-      const previous = (pendingPatch.current.games ?? {}) as Record<string, Record<string, unknown>>;
-      const incoming = patch.games as Record<string, Record<string, unknown>>;
-      const games: Record<string, Record<string, unknown>> = { ...previous };
-      for (const [id, values] of Object.entries(incoming)) games[id] = { ...(previous[id] ?? {}), ...values };
-      merged.games = games;
-    }
-    pendingPatch.current = merged;
+    pendingPatch.current = mergeQueuedPatch(pendingPatch.current, patch);
   }, []);
 
   const flushNativePatch = useCallback(async () => {

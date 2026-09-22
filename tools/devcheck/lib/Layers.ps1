@@ -304,7 +304,11 @@ function Test-Ui {
     if (-not (Test-Path (Join-Path $ui 'node_modules'))) {
         Skip-Layer 'src/Ui/node_modules 不存在（先 cd src/Ui && npm install）'
     }
+    $r = Invoke-Native -FilePath $npm -Arguments @('run', 'lint') -WorkingDirectory $ui -Tail 30
+    if ($r.ExitCode -ne 0) { throw 'src/Ui eslint 失败' }
+    $r = Invoke-Native -FilePath $npm -Arguments @('run', 'test') -WorkingDirectory $ui -Tail 30
+    if ($r.ExitCode -ne 0) { throw 'src/Ui 单元测试失败' }
     $r = Invoke-Native -FilePath $npm -Arguments @('run', 'build') -WorkingDirectory $ui -Tail 30
     if ($r.ExitCode -ne 0) { throw 'src/Ui 构建失败' }
-    return 'src/Ui vite build 通过'
+    return 'src/Ui eslint / vitest / vite build 通过'
 }
