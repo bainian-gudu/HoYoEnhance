@@ -250,6 +250,7 @@ internal sealed partial class UiBridge : IDisposable
             // 当前附着的是哪款游戏（未附着时为 null）与星穹铁道注册表解锁的最近结果。
             attachedGame = _service.AttachedGame is GameId attached ? GameCatalog.Get(attached).Key : null,
             starRailRegistryStatus = _service.StarRailRegistryStatus,
+            starRailRegistryFps = _service.StarRailRegistryCurrentFps,
             currentFps = _service.CurrentFpsFeedback,
             stubStatus = (int)_service.StubStatus,
             stubLastError = _service.LastErrorFeedback,

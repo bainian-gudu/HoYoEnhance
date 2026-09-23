@@ -34,7 +34,7 @@ function stubText(status: number, lastError: number): string {
 }
 
 export function RuntimeStatus({ app }: { app: AppState }) {
-  const { config, gameConfig, activeGame, runningGame, attachedGame, currentFps, attachedPid, stubStatus, stubLastError, antiBlurState, hideUidState, navigate } = app;
+  const { config, gameConfig, activeGame, runningGame, attachedGame, currentFps, attachedPid, stubStatus, stubLastError, antiBlurState, hideUidState, starRailRegistryFps, navigate } = app;
   const injection = GAME_META[activeGame].injection;
   const registryFps = GAME_META[activeGame].fpsLock?.value;
 
@@ -50,7 +50,8 @@ export function RuntimeStatus({ app }: { app: AppState }) {
       value: runtimeFpsText({
         running,
         attached,
-        registryFps,
+        registryBased: Boolean(registryFps),
+        registryFps: activeGame === 'starRail' ? starRailRegistryFps : null,
         currentFps,
         targetFps: gameConfig.targetFps,
       }),

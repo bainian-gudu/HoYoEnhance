@@ -31,6 +31,8 @@ internal sealed partial class UnlockService : IDisposable
         public int RegistryCheckedPid;
         /// <summary>星穹铁道：最近一次注册表核对的结果文案（同上，跨线程读）。</summary>
         public volatile string RegistryStatus = "尚未检查注册表";
+        /// <summary>星穹铁道：最近一次核对读到的注册表 FPS；null 表示未确认。</summary>
+        public int? RegistryCurrentFps;
         /// <summary>该游戏注入模块的完整路径。</summary>
         public string StubPath = "";
     }
@@ -118,6 +120,8 @@ internal sealed partial class UnlockService : IDisposable
 
     /// <summary>星穹铁道注册表解锁的最近一次核对结果（未启用时说明原因）。</summary>
     public string StarRailRegistryStatus => _sessions[GameId.StarRail].RegistryStatus;
+    /// <summary>星穹铁道最近一次核对读到的注册表 FPS；null 表示未确认。</summary>
+    public int? StarRailRegistryCurrentFps => _sessions[GameId.StarRail].RegistryCurrentFps;
 
     public AppConfig Config => _config;
 
@@ -471,16 +475,24 @@ internal sealed partial class UnlockService : IDisposable
         if (!_config.MasterEnabled || !profile.Enabled)
         {
             session.RegistryCheckPending = false;
+            session.RegistryCurrentFps = null;
             session.RegistryStatus = _config.MasterEnabled
                 ? "帧率解锁已关闭：未检查注册表"
                 : "总开关已关闭：未检查注册表";
             return new StarRailFpsResult(StarRailFpsOutcome.ValueMissing, null, null, session.RegistryStatus);
         }
 
-        if (!force && !session.RegistryCheckPending) return StarRailFpsRegistry.Read();
+        if (!force && !session.RegistryCheckPending)
+        {
+            var current = StarRailFpsRegistry.Read();
+            session.RegistryCurrentFps = current.CurrentFps;
+            session.RegistryStatus = current.Detail;
+            return current;
+        }
 
         session.RegistryCheckPending = false;
         var result = StarRailFpsRegistry.Ensure();
+        session.RegistryCurrentFps = result.CurrentFps;
         session.RegistryStatus = result.Detail;
         if (result.Changed) AppLog.Info("star rail registry fps: " + result.Detail);
         else AppLog.Debug("star rail registry fps: " + result.Detail);

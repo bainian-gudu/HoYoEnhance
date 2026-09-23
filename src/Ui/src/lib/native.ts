@@ -15,6 +15,8 @@ export type NativeState = {
   /** 当前已注入（附着）的游戏；未附着时为 null */
   attachedGame: GameId | null;
   attachedPid: number;
+  /** 星铁最近一次核对读到的注册表 FPS；null 表示尚未确认。 */
+  starRailRegistryFps: number | null;
   currentFps: number;
   /** Stub 生命周期状态：0 未注入 / 1 解析中 / 2 就绪 / 3 失败 / 4 退出中 */
   stubStatus: number;
@@ -149,6 +151,7 @@ function normalizeState(raw: any): NativeState {
     runningGame: isGameId(raw.runningGame) ? raw.runningGame : null,
     attachedGame: isGameId(raw.attachedGame) ? raw.attachedGame : null,
     attachedPid: Number(raw.attachedPid ?? 0),
+    starRailRegistryFps: Number.isInteger(raw.starRailRegistryFps) ? Number(raw.starRailRegistryFps) : null,
     currentFps: Number(raw.currentFps ?? 0),
     stubStatus: Number(raw.stubStatus ?? 0),
     stubLastError: Number(raw.stubLastError ?? 0),

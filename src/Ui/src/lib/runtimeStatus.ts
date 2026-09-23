@@ -1,21 +1,23 @@
 interface RuntimeFpsTextInput {
   running: boolean;
   attached: boolean;
-  registryFps?: number;
+  registryBased: boolean;
+  registryFps: number | null;
   currentFps: number;
   targetFps: number;
 }
 
-/** 运行状态卡的当前帧率文案。注册表解锁始终优先，即使画面效果让 Stub 处于附着状态。 */
+/** 运行状态卡的帧率文案。注册表游戏只展示最近一次实际核对到的值。 */
 export function runtimeFpsText({
   running,
   attached,
+  registryBased,
   registryFps,
   currentFps,
   targetFps,
 }: RuntimeFpsTextInput): string {
   if (!running) return '等待游戏启动';
-  if (registryFps) return `由注册表解锁 ${registryFps} FPS`;
+  if (registryBased) return registryFps === null ? '注册表帧率尚未确认' : `注册表当前设置 ${registryFps} FPS`;
   if (!attached) return '未注入';
   return currentFps > 0 ? `${currentFps} → ${targetFps} FPS` : `目标 ${targetFps} FPS`;
 }
