@@ -86,7 +86,6 @@ export function SettingsPage({ game, gameConfig, updateGameConfig, config, updat
       </>}
       {tab === 'behavior' && <section className="control-panel setting-list"><div className="section-intro"><h2>更安静，也更顺手</h2><p>让解锁器融入你的游戏习惯，无需每次重复操作。以下设置对所有游戏生效。</p></div>
         <ToggleRow title="解锁服务总开关" description="关闭后不再注入、不再强制帧率，游戏会回到自身的帧率档位" checked={config.masterEnabled} onChange={(value) => updateConfig('masterEnabled', value)} />
-        <ToggleRow title="自动解锁" description="检测到游戏启动后，自动应用该游戏自己的帧率设置" checked={config.autoWatch} onChange={(value) => updateConfig('autoWatch', value)} />
         <ToggleRow title="开机自启动" description="登录 Windows 后自动启动，在后台等待游戏运行" checked={config.autoStartWithWindows} onChange={(value) => updateConfig('autoStartWithWindows', value)} />
         <ToggleRow title="启动时自动以管理员权限运行" description="登录自启改由最高权限计划任务启动（不弹 UAC）；手动启动会请求一次 UAC" checked={config.autoStartAsAdministrator} onChange={(value) => updateConfig('autoStartAsAdministrator', value)} />
         {config.autoStartWithWindows && autostartNotice && <p className={`settings-small-note${autostart.notice ? ' is-warning' : ''}`}><ShieldCheck size={14} />{autostartNotice}</p>}
@@ -112,7 +111,6 @@ export function SettingsPage({ game, gameConfig, updateGameConfig, config, updat
       </section>}
       {tab === 'advanced' && <>
         <section className="control-panel setting-list"><div className="section-intro"><h2>后台与诊断</h2><p>默认值适用于日常使用，仅在需要时调整。</p></div>
-          <NumberSetting title="进程检测间隔" description="检测游戏进程的时间间隔，范围 200 - 10000 ms" min={200} max={10000} unit="ms" value={config.pollIntervalMs} onChange={(value) => updateConfig('pollIntervalMs', value)} />
           <ToggleRow title="调试日志" description="在桌面版中记录详细诊断信息，帮助排查运行问题" checked={config.debugLogging} onChange={(value) => updateConfig('debugLogging', value)} />
           <div className="setting-row"><div><label className="row-title" htmlFor="log-level-setting">最低日志级别</label><p>{isNative ? '过滤写入磁盘日志文件的最低级别' : '此偏好用于桌面日志；网页会话日志始终保留交互记录'}</p></div><select id="log-level-setting" className="select-input" value={config.logLevel} onChange={(event) => updateConfig('logLevel', event.target.value as LogLevel)}>{['Trace', 'Debug', 'Info', 'Warn', 'Error'].map((level) => <option key={level}>{level}</option>)}</select></div>
           <NumberSetting title="日志保留时间" description="桌面版自动清理超过保留时间的日志，范围 1 - 90 天" min={1} max={90} unit="天" value={config.logRetainDays} onChange={(value) => updateConfig('logRetainDays', value)} />

@@ -27,7 +27,7 @@ public sealed class GameProfilesDto
 [TsName("UnlockerConfig")]
 public sealed class UnlockerConfigDto
 {
-    public GameId ActiveGame { get; init; } = GameId.Genshin;
+    public GameId ActiveGame { get; init; } = GameDefinitions.DefaultGame;
     public GameProfilesDto Games { get; init; } = new();
     public bool MasterEnabled { get; init; } = true;
     public bool AutoWatch { get; init; } = true;

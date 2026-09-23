@@ -1,17 +1,26 @@
 import { motion } from 'framer-motion';
-import { ArrowRight, ArrowUpRight, ChevronRight, CircleHelp, Folder, FolderOpen, LayoutGrid, LoaderCircle, PanelBottomClose, Play, Power, ScanLine, Shield, ShieldAlert, ShieldCheck, SlidersHorizontal } from 'lucide-react';
+import { ArrowRight, ArrowUpRight, ChevronRight, CircleHelp, Folder, FolderOpen, LayoutGrid, LoaderCircle, PanelBottomClose, Play, Power, Shield, ShieldAlert, ShieldCheck, SlidersHorizontal } from 'lucide-react';
 import type { AppState } from '../hooks/useAppState';
 import { FpsControl } from '../components/FpsControl';
 import { RuntimeStatus } from '../components/RuntimeStatus';
 import { FEATURE_ICONS, GameMark } from '../components/GameIcon';
 import { PageHeading, ToggleRow } from '../components/ui';
 import { APP_NAME, GAME_IDS, GAME_META } from '../lib/config';
+import { gameRuntimeState } from '../lib/gameRuntime';
 import type { GameId } from '../lib/config';
 
-/** 国服 / 国际服：只有原神能从可执行文件名区分，星穹铁道两边同名。 */
+/** 根据已配置主程序路径显示发行地区；无法从路径判断时不猜测。 */
 function regionOf(game: GameId, path: string | null): string | null {
-  if (game !== 'genshin' || !path) return null;
-  return path.toLowerCase().includes('genshinimpact.exe') ? '国际服' : '国服';
+  if (!path) return null;
+  const normalized = path.replaceAll('\\', '/').toLowerCase();
+  if (game === 'genshin') {
+    if (normalized.endsWith('/genshinimpact.exe')) return '国际服';
+    if (normalized.endsWith('/yuanshen.exe')) return '国服';
+    return null;
+  }
+  if (/(崩坏|星穹铁道|mihoyo|china|中国|cn)/i.test(normalized)) return '国服';
+  if (/(honkai|star rail|starrail|cognosphere|global|overseas|international)/i.test(normalized)) return '国际服';
+  return null;
 }
 
 /**
@@ -20,7 +29,7 @@ function regionOf(game: GameId, path: string | null): string | null {
  */
 export function OverviewPage({ app }: { app: AppState }) {
   const {
-    native, config, gameConfig, activeGame, sessionGame, setModal, launchState, statusText, runningGame, attachedGame, attachedPid,
+    native, config, gameConfig, activeGame, sessionGame, setModal, launchState, runningGame, runningPids, attachedGame, attachedPid, activeAttached,
     isElevated, needsAdmin, elevating, effectiveEnabled, readiness, navigate, updateConfig,
     updateGameConfig, restartElevated, handleLaunch, openPathDialog,
   } = app;
@@ -28,7 +37,7 @@ export function OverviewPage({ app }: { app: AppState }) {
 
   return (
     <>
-      <PageHeading title="游戏概览" description={`准备好，以更流畅的方式游玩${meta.name}。`}><div className={`readiness ${!effectiveEnabled || !gameConfig.gamePath ? 'is-paused' : ''}`} aria-live="polite">{launchState === 'launching' ? <LoaderCircle size={13} className="spin" /> : <span className={`status-dot ${attachedGame === activeGame && effectiveEnabled ? 'pulse' : ''}`} />}{readiness}</div></PageHeading>
+      <PageHeading title="游戏概览" description={`准备好，以更流畅的方式游玩${meta.name}。`}><div className={`readiness ${!effectiveEnabled || !gameConfig.gamePath ? 'is-paused' : ''}`} aria-live="polite">{launchState === 'launching' ? <LoaderCircle size={13} className="spin" /> : <span className={`status-dot ${activeAttached && effectiveEnabled ? 'pulse' : ''}`} />}{readiness}</div></PageHeading>
       <section className={`overview-hero is-${activeGame}`} aria-label={`${APP_NAME} · ${meta.name}`}>
         {/* 星穹铁道主视觉素材未定，先复用原神那张风景图占位；换素材时改这里的 src 即可。 */}
         <motion.img className="hero-image" src="/images/teyvat-landscape.webp" alt={activeGame === 'genshin' ? '阳光下的璃月风格山峦、亭台与碧水' : '主视觉占位图（星穹铁道素材待替换）'} initial={{ scale: 1.045 }} animate={{ scale: 1 }} transition={{ duration: 1.8, ease: 'easeOut' }} />
@@ -45,7 +54,6 @@ export function OverviewPage({ app }: { app: AppState }) {
             {meta.injection.features.map(({ key, title, description }) => (
               <ToggleRow key={key} icon={FEATURE_ICONS[key]} title={title} description={description} checked={gameConfig[key]} onChange={(value) => updateGameConfig(key, value)} />
             ))}
-            <ToggleRow icon={ScanLine} title="自动解锁" description="检测到游戏启动后，自动应用帧率设置" checked={config.autoWatch} onChange={(value) => updateConfig('autoWatch', value)} />
             <ToggleRow icon={Power} title="开机自启动" description="登录 Windows 后自动启动，在后台等待游戏运行" checked={config.autoStartWithWindows} onChange={(value) => updateConfig('autoStartWithWindows', value)} />
             <ToggleRow icon={Shield} title="启动时自动提权" description="登录自启改由最高权限计划任务启动（不弹 UAC）；手动启动请求一次 UAC" checked={config.autoStartAsAdministrator} onChange={(value) => updateConfig('autoStartAsAdministrator', value)} />
             <ToggleRow icon={PanelBottomClose} title="启动后最小化到托盘" description="开启：启动、最小化和关闭都驻留托盘；关闭：最小化到任务栏，关闭窗口退出程序" checked={config.startMinimized} onChange={(value) => updateConfig('startMinimized', value)} />
@@ -60,12 +68,13 @@ export function OverviewPage({ app }: { app: AppState }) {
             const isCurrent = id === activeGame;
             const isSession = id === sessionGame;
             const region = regionOf(id, item.gamePath);
-            const busy = isSession && launchState === 'launching';
-            // 运行状态按游戏归属：只有真正在跑的那款显示运行/附加，另一款一律「等待启动」。
-            const running = attachedGame === id;
-            const state = running ? `已附加 · PID ${attachedPid}`
+            const runtime = gameRuntimeState(id, { runningGame, runningPids, attachedGame, attachedPid });
+            const { pid, running, attached } = runtime;
+            const busy = isSession && launchState === 'launching' && !running;
+            // 每一行使用自己的进程 PID，不借用另一款游戏的附着或启动状态。
+            const state = attached ? `已附加 · PID ${runtime.pid || '—'}`
               : busy ? '正在启动…'
-              : runningGame === id ? (native ? statusText || '运行中' : '运行中')
+              : running ? `已启动 · PID ${pid || '—'}`
               : !native && isSession && launchState === 'running' ? '演示会话进行中'
               : '等待启动';
             return (

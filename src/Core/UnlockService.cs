@@ -35,6 +35,8 @@ internal sealed partial class UnlockService : IDisposable
         public int? RegistryCurrentFps;
         /// <summary>该游戏注入模块的完整路径。</summary>
         public string StubPath = "";
+        /// <summary>最近一次轮询到的进程 PID；0 表示当前未运行。</summary>
+        public int RunningPid;
     }
 
     private readonly AppConfig _config;
@@ -45,6 +47,7 @@ internal sealed partial class UnlockService : IDisposable
         GameCatalog.All.ToDictionary(game => game.Id, _ => new GameSession());
 
     private Task? _loop;
+    private Task? _runningStateLoop;
     /// <summary>
     /// 当前认为已成功附着的游戏与 PID（IPC 只有一个槽位，同时只附着一款）。
     /// 后台监视线程写、UI 线程读，用 int 值 + Volatile 保证可见性；0 = 未附着。
@@ -99,6 +102,8 @@ internal sealed partial class UnlockService : IDisposable
     public GameId? AttachedGame => DecodeGame(Volatile.Read(ref _attachedGameValue));
     /// <summary>当前检测到正在运行的游戏（没有游戏进程时为 null）。</summary>
     public GameId? RunningGame => DecodeGame(Volatile.Read(ref _runningGameValue));
+    /// <summary>返回指定游戏最近一次轮询到的进程 PID；0 表示未运行。</summary>
+    public int RunningPid(GameId game) => Volatile.Read(ref _sessions[game].RunningPid);
     /// <summary>
     /// 界面 / 托盘当前展示的游戏：自动跟随运行中的游戏时只改这里；
     /// 用户手动切换才同时改 <see cref="Config"/> 里的 ActiveGame。
@@ -138,11 +143,11 @@ internal sealed partial class UnlockService : IDisposable
     /// <summary>
     /// 指定游戏是否有任一功能需要把 Stub 注入到游戏进程。
     /// 星穹铁道的帧率走注册表，只有画面效果才需要注入；
-    /// 自动监视关闭时，同时停用已经附着的功能，避免 Stub 继续强制写入。
+    /// 总开关关闭时，停止向游戏注入功能。
     /// </summary>
     private bool NeedsInjection(GameId game)
     {
-        if (!_config.MasterEnabled || !_config.AutoWatch) return false;
+        if (!_config.MasterEnabled) return false;
         var descriptor = GameCatalog.Get(game);
         var profile = _config.Profile(game);
         var fpsNeedsInject = profile.Enabled && !descriptor.FpsViaRegistry;
@@ -192,20 +197,21 @@ internal sealed partial class UnlockService : IDisposable
     public void Start()
     {
         AppLog.Info("UnlockService.Start()");
+        _runningStateLoop = Task.Run(() => RunningStateLoopAsync(_cts.Token));
         _loop = Task.Run(() => WatchLoopAsync(_cts.Token));
     }
 
     /// <summary>
     /// 用户手动切换当前正在配置的游戏（界面三个游戏页与托盘一起换）。
     /// 切到「正在运行」的那款属于临时查看：只改展示，不写用户保存的选择；
-    /// 自动跟随后若退出时仍停留在跟随页，会回到原神默认页。切到未运行的游戏才保存为新选择。
+    /// 所有游戏进程退出后回退到目录定义的默认页。切到未运行的游戏才保存为新选择。
     /// 游戏启动时的自动跟随请用 <see cref="SetDisplayGame"/>。
     /// </summary>
     public void SetActiveGame(GameId game)
     {
         // 运行中的游戏是「当前实际在玩的那款」：用户切过去多半只是看状态，
         // 不应该覆盖保存的主选择，也不影响游戏退出后的回退。
-        if (RunningGame == game)
+        if (GameSelectionPolicy.IsTransientView(game, RunningGame))
         {
             SetDisplayGame(game);
             return;
@@ -224,7 +230,7 @@ internal sealed partial class UnlockService : IDisposable
 
     /// <summary>
     /// 自动跟随运行中的游戏：只切换界面 / 托盘展示，不写配置或改变用户选择；
-    /// 游戏退出后由托盘状态机回到原神默认页。
+    /// 进程退出后的默认页由托盘状态机统一处理。
     /// </summary>
     public void SetDisplayGame(GameId game)
     {
@@ -259,7 +265,7 @@ internal sealed partial class UnlockService : IDisposable
             return;
         }
 
-        var featuresActive = _config.MasterEnabled && _config.AutoWatch;
+        var featuresActive = _config.MasterEnabled;
         var stubShouldRun = NeedsInjection(game);
         if (!stubShouldRun)
         {
@@ -316,21 +322,16 @@ internal sealed partial class UnlockService : IDisposable
         if (enabled) _sessions[GameId.StarRail].RegistryCheckPending = true;
         PushConfigToIpc(force: true);
         SetStatus(enabled
-            ? (_config.AutoWatch ? "总开关已开启 — 后台监视中" : "总开关已开启 — 自动监视关闭")
+            ? "总开关已开启 — 后台运行中"
             : "总开关已关闭 — 不会注入 / 不会强制帧率");
     }
 
-    /// <summary>是否自动监视并注入游戏进程。</summary>
+    /// <summary>旧配置兼容入口；自动监视始终作为后台任务开启。</summary>
     public void SetAutoWatch(bool enabled)
     {
-        _config.AutoWatch = enabled;
+        _ = enabled;
+        _config.AutoWatch = true;
         _config.TrySave(out _);
-        // 关闭自动监视也必须立即停用已有 Stub；否则后台循环可能还在保活并强制写 FPS。
-        PushConfigToIpc(force: true);
-        if (!enabled)
-        {
-            SetAttached(null, 0);
-        }
         Raise(forceUi: true);
     }
 
@@ -557,6 +558,7 @@ internal sealed partial class UnlockService : IDisposable
         try { _ipc.RequestExit(); } catch { /* ignore */ }
         _cts.Cancel();
         try { _loop?.Wait(2000); } catch { /* ignore */ }
+        try { _runningStateLoop?.Wait(2000); } catch { /* ignore */ }
         _cts.Dispose();
         _ipc.Dispose();
         AppLog.Info("UnlockService disposed");

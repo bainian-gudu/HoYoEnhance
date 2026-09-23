@@ -107,17 +107,6 @@ internal sealed partial class MainForm
         menu.Items.Add(_trayFpsRoot);
         BuildTrayFpsItems();
 
-        _trayAutoWatchItem = MakeCheckItem(
-            "自动解锁",
-            _config.AutoWatch,
-            "检测到游戏启动后自动应用帧率设置");
-        _trayAutoWatchItem.CheckedChanged += (_, _) =>
-        {
-            if (_syncingUi) return;
-            _service.SetAutoWatch(_trayAutoWatchItem.Checked);
-            AfterTrayConfigChange("自动解锁");
-        };
-        menu.Items.Add(_trayAutoWatchItem);
         menu.Items.Add(MakeSep());
 
         // —— 画面效果注入组（随游戏进程即时生效；联机/UGC 玩法勿开）——

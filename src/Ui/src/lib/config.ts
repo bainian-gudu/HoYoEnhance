@@ -1,6 +1,8 @@
+import { DEFAULT_GAME_ID, GAME_CATALOG, GAME_IDS } from './bridge.generated';
 import type { GameId, GameProfile, LogLevel, UnlockerConfig } from './bridge.generated';
 
 export type { GameId, GameProfile, LogLevel, UnlockerConfig } from './bridge.generated';
+export { DEFAULT_GAME_ID, GAME_CATALOG, GAME_IDS } from './bridge.generated';
 
 export const PROJECT_URL = 'https://github.com/bainian-gudu/HoYoEnhance';
 /**
@@ -22,9 +24,6 @@ export type Theme = 'dark' | 'light';
 /** 全部页面 id；顺序即侧栏主导航 + 次级导航的顺序。 */
 export const PAGES = ['overview', 'settings', 'logs', 'guide', 'about'] as const;
 export type Page = (typeof PAGES)[number];
-
-/** 支持的游戏：原神与崩坏：星穹铁道，各自持有一份互不影响的配置。 */
-export const GAME_IDS = ['genshin', 'starRail'] as const satisfies readonly GameId[];
 
 /** 画面效果对应的配置键：每个游戏只列出自己注入模块里真实存在的那几项。 */
 export type GameFeatureKey = 'hideUid' | 'antiBlurPerspective' | 'antiBlurDiveMosaic';
@@ -69,12 +68,26 @@ export interface GameMeta {
   injection: GameInjectionMeta;
 }
 
+const FEATURE_META: Record<GameFeatureKey, GameFeatureMeta> = {
+  antiBlurPerspective: { key: 'antiBlurPerspective', title: '反角色虚化', description: '开启后镜头拉近时，角色不再透明化（虚化效果被跳过）' },
+  antiBlurDiveMosaic: { key: 'antiBlurDiveMosaic', title: '移除水下马赛克', description: '开启后角色入水时，不再显示马赛克虚化效果' },
+  hideUid: { key: 'hideUid', title: '隐藏 UID', description: '隐藏游戏水印与资料页上的 UID 文本' },
+};
+
+function gameFeatures(supportsDiveMosaic: boolean): readonly GameFeatureMeta[] {
+  return [
+    FEATURE_META.antiBlurPerspective,
+    ...(supportsDiveMosaic ? [FEATURE_META.antiBlurDiveMosaic] : []),
+    FEATURE_META.hideUid,
+  ];
+}
+
 export const GAME_META: Record<GameId, GameMeta> = {
   genshin: {
-    id: 'genshin',
-    name: '原神',
-    short: '原神',
-    exeNames: ['YuanShen', 'GenshinImpact'],
+    id: GAME_CATALOG.genshin.id,
+    name: GAME_CATALOG.genshin.displayName,
+    short: GAME_CATALOG.genshin.shortName,
+    exeNames: GAME_CATALOG.genshin.executableNames,
     demoPath: 'D:\\Games\\Genshin Impact\\Genshin Impact Game\\YuanShen.exe',
     pathPlaceholder: 'D:\\Games\\Genshin Impact\\Genshin Impact Game\\YuanShen.exe',
     pathHint: '请选择游戏本体，而非米哈游启动器。支持国服 YuanShen.exe 与国际服 GenshinImpact.exe。',
@@ -84,30 +97,25 @@ export const GAME_META: Record<GameId, GameMeta> = {
       guideKicker: 'QUICK START',
       guideHeadline: '下一段旅程，更顺畅一点。',
     },
-    // 原神的注入模块与命名保持现状：FpsUnlockerStub.dll 里的三项效果原名不动。
     injection: {
-      module: 'FpsUnlockerStub.dll',
-      features: [
-        { key: 'antiBlurPerspective', title: '反角色虚化', description: '开启后镜头拉近时，角色不再透明化（虚化效果被跳过）' },
-        { key: 'antiBlurDiveMosaic', title: '移除水下马赛克', description: '开启后角色入水时，不再显示马赛克虚化效果' },
-        { key: 'hideUid', title: '隐藏 UID', description: '隐藏游戏水印与资料页上的 UID 文本' },
-      ],
+      module: GAME_CATALOG.genshin.stubFileName,
+      features: gameFeatures(GAME_CATALOG.genshin.supportsDiveMosaic),
     },
   },
   starRail: {
-    id: 'starRail',
-    name: '崩坏：星穹铁道',
-    short: '星穹铁道',
-    exeNames: ['StarRail'],
+    id: GAME_CATALOG.starRail.id,
+    name: GAME_CATALOG.starRail.displayName,
+    short: GAME_CATALOG.starRail.shortName,
+    exeNames: GAME_CATALOG.starRail.executableNames,
     // 星穹铁道不改内存、不注入进程，直接写注册表里的画面设置；只支持 120 帧。
-    fpsLock: {
-      value: 120,
+    fpsLock: GAME_CATALOG.starRail.fpsViaRegistry ? {
+      value: GAME_CATALOG.starRail.lockedFps,
       notes: [
         '星穹铁道通过注册表解锁帧率，不注入游戏进程，只支持 120 FPS。',
         '开启后会先检查注册表：已经是 120 FPS 就不覆盖，否则写入 120。',
         '关闭开关不会回写注册表，游戏沿用现有设置；改完需重启游戏生效。',
       ],
-    },
+    } : undefined,
     demoPath: 'D:\\Games\\Star Rail\\Game\\StarRail.exe',
     pathPlaceholder: 'D:\\Games\\Star Rail\\Game\\StarRail.exe',
     pathHint: '请选择游戏本体 StarRail.exe（国服与国际服同名），不要选择启动器或下载器。',
@@ -117,13 +125,9 @@ export const GAME_META: Record<GameId, GameMeta> = {
       guideKicker: 'QUICK START',
       guideHeadline: '下一站，更顺畅一点。',
     },
-    // 星穹铁道走自己独立的注入模块，效果条目与显示名保持统一。
     injection: {
-      module: 'StarRailStub.dll',
-      features: [
-        { key: 'antiBlurPerspective', title: '反角色虚化', description: '开启后镜头拉近时，角色不再透明化（虚化效果被跳过）' },
-        { key: 'hideUid', title: '隐藏 UID', description: '隐藏游戏水印与资料页上的 UID 文本' },
-      ],
+      module: GAME_CATALOG.starRail.stubFileName,
+      features: gameFeatures(GAME_CATALOG.starRail.supportsDiveMosaic),
     },
   },
 };
@@ -142,7 +146,7 @@ export interface LogEntry {
 }
 
 export const DEFAULT_CONFIG: UnlockerConfig = {
-  activeGame: 'genshin',
+  activeGame: DEFAULT_GAME_ID,
   games: {
     genshin: {
       targetFps: 120,
@@ -191,7 +195,7 @@ export const CONFIG_LABELS: Record<keyof UnlockerConfig, string> = {
   activeGame: '当前游戏',
   games: '游戏配置',
   masterEnabled: '解锁服务总开关',
-  autoWatch: '自动解锁',
+  autoWatch: '兼容字段',
   startMinimized: '启动后最小化到托盘',
   autoStartWithWindows: '开机自启动',
   autoStartAsAdministrator: '启动时自动以管理员权限运行',
@@ -284,6 +288,7 @@ export function parseConfig(value: unknown): UnlockerConfig {
       Object.assign(next, { [key]: item });
     }
   }
+  next.autoWatch = true;
   for (const [key, min, max] of [
     ['pollIntervalMs', 200, 10000],
     ['logRetainDays', 1, 90],

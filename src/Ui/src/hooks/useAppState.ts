@@ -3,10 +3,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ToastItem } from '../components/ui';
 import type { GameId, GameProfile, LogEntry, LogLevel, UnlockerConfig } from '../lib/config';
 import {
-  APP_NAME, CONFIG_LABELS, GAME_CONFIG_LABELS, GAME_IDS, GAME_META, STORAGE_KEY,
+  APP_NAME, CONFIG_LABELS, DEFAULT_GAME_ID, GAME_CONFIG_LABELS, GAME_IDS, GAME_META, STORAGE_KEY,
   createDefaultConfig, downloadFile, isGameId, loadConfig, makeLog, parseConfig,
 } from '../lib/config';
 import { mergePendingPatch, mergeQueuedPatch } from '../lib/configPatch';
+import { gameRuntimeState } from '../lib/gameRuntime';
 import type { AutostartState, NativeState } from '../lib/native';
 import { isNativeHost, nativeGetBootstrap, nativeInvoke, onNativeLog, onNativeState } from '../lib/native';
 import { useAppChrome } from './useAppChrome';
@@ -48,10 +49,11 @@ export function useAppState() {
   // runningGame 是当前检测到在跑的游戏，attachedGame 是真正注入了 Stub 的那款；
   // 界面只让对应游戏显示运行/注入状态，另一款必须显示等待启动。
   const [runningGame, setRunningGame] = useState<GameId | null>(null);
+  const [runningPids, setRunningPids] = useState<Record<GameId, number>>({ genshin: 0, starRail: 0 });
   const [attachedGame, setAttachedGame] = useState<GameId | null>(null);
   // 界面当前展示的游戏：自动跟随、或手动切到正在运行的游戏时，它与 config.activeGame
   // （用户保存的选择）可能不同。切到未运行的游戏才两者一起改；游戏退出只回退展示。
-  const [displayGame, setDisplayGame] = useState<GameId>(initial.config.activeGame);
+  const [displayGame, setDisplayGame] = useState<GameId>(initial.config.activeGame || DEFAULT_GAME_ID);
   const displayGameRef = useRef(displayGame);
   useEffect(() => { displayGameRef.current = displayGame; }, [displayGame]);
   const { page, theme, setTheme, sidebarOpen, setSidebarOpen, sidebarRef, navigate } =
@@ -117,6 +119,7 @@ export function useAppState() {
     setSaveState(state.saveState);
     setStatusText(state.statusText || '就绪');
     setRunningGame(state.runningGame ?? null);
+    setRunningPids(state.runningPids);
     setAttachedGame(state.attachedGame ?? null);
     setAttachedPid(state.attachedPid);
     setStarRailRegistryFps(state.starRailRegistryFps ?? null);
@@ -218,8 +221,8 @@ export function useAppState() {
 
   /**
    * 当前正在配置的游戏档案（概览 / 设置 / 使用指南都读它）。
-   * 用 displayGame 而不是 config.activeGame：自动跟随运行中的游戏时界面跟着换，
-   * 但用户保存的选择保持不变，手动切换时才由 setGame 同时改两者。
+   * 用 displayGame 而不是 config.activeGame：运行时展示页可跟随游戏变化；
+   * 持久选择由宿主决策，浏览器预览则由前端本地保存。
    */
   const activeGame = displayGame;
   const gameConfig: GameProfile = config.games[activeGame];
@@ -264,21 +267,21 @@ export function useAppState() {
     setModal('path');
   }
 
-  /** 切换当前游戏：写入配置并同步一次日志与标题。 */
+  /** 切换展示游戏；桌面端由宿主统一决定是否持久化选择。 */
   function setGame(game: GameId) {
     if (displayGameRef.current === game && configRef.current.activeGame === game) return;
     localGameOverride.current = { game, at: Date.now() };
-    // 切到正在运行的游戏属于临时查看：只换展示，不覆盖用户保存的当前游戏。
-    // 宿主侧会再判一次，这里同步处理是为了避免界面先闪成错误的持久选择。
-    const temporaryView = runningGame === game;
     setDisplayGame(game);
-    if (!temporaryView) setConfig((previous) => ({ ...previous, activeGame: game }));
+    if (!native) setConfig((previous) => ({ ...previous, activeGame: game }));
     addLog('Info', `已切换到「${GAME_META[game].name}」。`, game);
-    // 手动切换始终下发一次：宿主需要据此换展示；切到运行中的游戏时由宿主决定
-    // 不写用户选择，切到未运行的游戏时才记为新的用户选择。
     if (native) {
-      queuePatch({ activeGame: game });
-      schedulePatch(80);
+      setSaveState('saving');
+      void nativeInvoke<NativeState>('setActiveGame', { game })
+        .then(applyNativeState)
+        .catch((error: unknown) => {
+          setSaveState('error');
+          notify('游戏切换失败', error instanceof Error ? error.message : '未知错误', 'error');
+        });
     }
     // 没有正在进行的启动会话时，让状态行跟着当前游戏走。
     if (launchStateRef.current === 'idle') setSessionGame(game);
@@ -298,9 +301,8 @@ export function useAppState() {
       const result = await nativeInvoke<{ ok: boolean; message: string; state?: NativeState }>('launchGame', { game });
       if (result.state) applyNativeState(result.state as NativeState);
       if (result.ok) {
-        setLaunchState('running');
-        notify('已启动游戏', result.message);
-        addLog('Info', result.message);
+        notify('正在启动游戏', result.message);
+        addLog('Info', result.message + '，等待进程状态确认。');
       } else {
         setLaunchState('idle');
         notify('启动失败', result.message, 'error');
@@ -311,6 +313,11 @@ export function useAppState() {
       notify('启动失败', error instanceof Error ? error.message : '未知错误', 'error');
     }
   }
+
+  useEffect(() => {
+    if (launchState !== 'launching' || runningPids[sessionGame] <= 0) return;
+    setLaunchState('running');
+  }, [launchState, runningPids, sessionGame]);
 
   async function restartElevated() {
     if (!native || elevating || isElevated) return;
@@ -463,8 +470,9 @@ export function useAppState() {
 
   const effectiveEnabled = config.masterEnabled && gameConfig.enabled;
   // 当前游戏是否真的在跑 / 真的被注入：另一款游戏的状态一律不借用。
-  const activeRunning = runningGame === activeGame;
-  const activeAttached = activeRunning && attachedGame === activeGame;
+  const activeRuntime = gameRuntimeState(activeGame, { runningGame, runningPids, attachedGame, attachedPid });
+  const activeRunning = activeRuntime.running;
+  const activeAttached = activeRunning && activeRuntime.attached;
   const readiness = launchState === 'launching' ? '正在启动…'
     : !native && launchState === 'running' && sessionGame === activeGame ? '演示会话进行中'
     : activeAttached
@@ -479,7 +487,7 @@ export function useAppState() {
     native, booting, config, setConfig, gameConfig, activeGame, setGame, page, theme, setTheme, sidebarOpen, setSidebarOpen,
     modal, setModal, modalGame, sessionGame, saveState, toasts, dismissToast, logs, setLogs, launchState, statusText,
     attachedPid, runningGame, attachedGame, activeRunning, activeAttached,
-    currentFps, starRailRegistryFps, isElevated, needsAdmin, elevating, autostart, version, effectiveEnabled, readiness,
+    currentFps, starRailRegistryFps, runningPids, isElevated, needsAdmin, elevating, autostart, version, effectiveEnabled, readiness,
     stubStatus, stubLastError, antiBlurState, hideUidState,
     importRef, sidebarRef, addLog, notify, navigate, applyNativeState, updateConfig, updateGameConfig, openPathDialog, beginLaunch,
     restartElevated, startUninstall, handleLaunch, exportConfig, importConfig, exportLogs,

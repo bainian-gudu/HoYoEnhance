@@ -12,6 +12,8 @@ export type NativeState = {
   gamePathStatus: string;
   /** 当前检测到正在运行的游戏；没有游戏进程时为 null */
   runningGame: GameId | null;
+  /** 各游戏最近一次轮询到的进程 PID；0 表示未运行。 */
+  runningPids: Record<GameId, number>;
   /** 当前已注入（附着）的游戏；未附着时为 null */
   attachedGame: GameId | null;
   attachedPid: number;
@@ -149,6 +151,10 @@ function normalizeState(raw: any): NativeState {
     statusText: String(raw.statusText ?? ''),
     gamePathStatus: String(raw.gamePathStatus ?? ''),
     runningGame: isGameId(raw.runningGame) ? raw.runningGame : null,
+    runningPids: {
+      genshin: Number.isInteger(raw.runningPids?.genshin) ? Math.max(0, Number(raw.runningPids.genshin)) : 0,
+      starRail: Number.isInteger(raw.runningPids?.starRail) ? Math.max(0, Number(raw.runningPids.starRail)) : 0,
+    },
     attachedGame: isGameId(raw.attachedGame) ? raw.attachedGame : null,
     attachedPid: Number(raw.attachedPid ?? 0),
     starRailRegistryFps: Number.isInteger(raw.starRailRegistryFps) ? Number(raw.starRailRegistryFps) : null,

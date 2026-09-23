@@ -13,6 +13,9 @@ internal static class Program
         TrayGameFollowStateTests.Run(harness);
         WindowLocationStateTests.Run(harness);
         RunningSessionTrackerTests.Run(harness);
+        GamePollingPolicyTests.Run(harness);
+        GameSelectionPolicyTests.Run(harness);
+        GameDefinitionTests.Run(harness);
         AutostartTests.Run(harness);
         ConfigExportTests.Run(harness);
         ConfigContractTests.Run(harness);

@@ -13,7 +13,7 @@ namespace GenshinFpsUnlocker.Host;
 internal sealed partial class AppConfig
 {
     /// <summary>当前正在配置的游戏：概览 / 设置 / 使用指南跟着它切换。</summary>
-    public GameId ActiveGame { get; set; } = GameId.Genshin;
+    public GameId ActiveGame { get; set; } = GameCatalog.DefaultGame;
 
     /// <summary>
     /// 每个游戏一份的独立配置（帧率、开关、画面效果、游戏路径）。
@@ -143,6 +143,7 @@ internal sealed partial class AppConfig
     public void Sanitize()
     {
         Games.Sanitize();
+        AutoWatch = true;
         PollIntervalMs = Math.Clamp(PollIntervalMs, 200, 10000);
         LogRetainDays = Math.Clamp(LogRetainDays, 1, 90);
         if (string.IsNullOrWhiteSpace(LogLevel)) LogLevel = "Debug";

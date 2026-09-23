@@ -21,6 +21,10 @@ internal sealed partial class UiBridge
             case "patchConfig":
                 return Task.FromResult<object?>(PatchConfig(p));
 
+            case "setActiveGame":
+                _service.SetActiveGame(ReadGameParam(p));
+                return Task.FromResult<object?>(BuildStateObject());
+
             case "setFps":
             {
                 var game = ReadGameParam(p);

@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { createDefaultConfig, isValidGamePath, parseConfig } from './config';
+import { createDefaultConfig, DEFAULT_GAME_ID, GAME_CATALOG, GAME_IDS, GAME_META, isValidGamePath, parseConfig } from './config';
+
+describe('game metadata contract', () => {
+  it('uses the generated catalog for shared game capabilities', () => {
+    expect(DEFAULT_GAME_ID).toBe('genshin');
+    expect(GAME_IDS).toEqual(['genshin', 'starRail']);
+    expect(GAME_META.genshin.name).toBe(GAME_CATALOG.genshin.displayName);
+    expect(GAME_META.starRail.injection.module).toBe(GAME_CATALOG.starRail.stubFileName);
+    expect(GAME_META.starRail.fpsLock?.value).toBe(GAME_CATALOG.starRail.lockedFps);
+    expect(GAME_META.genshin.injection.features.map(({ key }) => key)).toContain('antiBlurDiveMosaic');
+    expect(GAME_META.starRail.injection.features.map(({ key }) => key)).not.toContain('antiBlurDiveMosaic');
+  });
+});
 
 describe('parseConfig', () => {
   it('rejects values that are not JSON objects', () => {
@@ -21,6 +33,10 @@ describe('parseConfig', () => {
     expect(config.pollIntervalMs).toBe(2500);
     expect(config.logLevel).toBe('Warn');
     expect((config as unknown as Record<string, unknown>).unknownKey).toBeUndefined();
+  });
+
+  it('keeps background monitoring enabled when loading a legacy disabled value', () => {
+    expect(parseConfig({ autoWatch: false }).autoWatch).toBe(true);
   });
 
   it('rejects invalid booleans and ranges', () => {

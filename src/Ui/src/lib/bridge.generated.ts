@@ -36,3 +36,46 @@ export interface UnlockerConfig {
   logRetainDays: number;
   suppressAdminHint: boolean;
 }
+
+export interface GameDefinition {
+  id: GameId;
+  key: string;
+  displayName: string;
+  shortName: string;
+  processNames: readonly string[];
+  executableNames: readonly string[];
+  stubFileName: string;
+  fpsViaRegistry: boolean;
+  lockedFps: number;
+  supportsDiveMosaic: boolean;
+}
+
+export const GAME_CATALOG = {
+  genshin: {
+    id: 'genshin',
+    key: 'genshin',
+    displayName: '原神',
+    shortName: '原神',
+    processNames: ['YuanShen', 'GenshinImpact'],
+    executableNames: ['YuanShen', 'GenshinImpact'],
+    stubFileName: 'FpsUnlockerStub.dll',
+    fpsViaRegistry: false,
+    lockedFps: 0,
+    supportsDiveMosaic: true,
+  },
+  starRail: {
+    id: 'starRail',
+    key: 'starRail',
+    displayName: '崩坏：星穹铁道',
+    shortName: '星穹铁道',
+    processNames: ['StarRail'],
+    executableNames: ['StarRail'],
+    stubFileName: 'StarRailStub.dll',
+    fpsViaRegistry: true,
+    lockedFps: 120,
+    supportsDiveMosaic: false,
+  },
+} as const satisfies Record<GameId, GameDefinition>;
+
+export const DEFAULT_GAME_ID: GameId = 'genshin';
+export const GAME_IDS = Object.keys(GAME_CATALOG) as GameId[];

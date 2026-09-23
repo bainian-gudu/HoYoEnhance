@@ -284,8 +284,6 @@ internal static class Program
             if ((args[i] is "--fps" or "-f") && i + 1 < args.Length && int.TryParse(args[i + 1], out var fps))
                 // 命令行帧率作用于界面上当前选中的游戏（默认原神）。
                 config.ActiveProfile.TargetFps = fps;
-            if (args[i] is "--no-watch")
-                config.AutoWatch = false;
             // 仅 --minimized / -m 强制启动进托盘；--autostart 跟随配置（默认显示窗，可勾选最小化）
             if (args[i] is "--minimized" or "-m")
                 config.StartMinimized = true;

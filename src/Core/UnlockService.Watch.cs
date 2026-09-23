@@ -8,9 +8,30 @@ namespace GenshinFpsUnlocker.Host;
 /// </summary>
 internal sealed partial class UnlockService
 {
+    private async Task RunningStateLoopAsync(CancellationToken token)
+    {
+        while (!token.IsCancellationRequested)
+        {
+            try
+            {
+                if (RefreshRunningPids()) Raise(forceUi: false);
+                await Task.Delay(GamePollingPolicy.RunningStateIntervalMs(_config.PollIntervalMs), token);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                AppLog.Warn("游戏进程状态轮询失败: " + ex.Message);
+                try { await Task.Delay(1000, token); } catch { break; }
+            }
+        }
+    }
+
     /// <summary>
     /// 监视主循环：
-    /// 1) 总开关/自动监视关闭 → 空闲等待
+    /// 1) 总开关关闭 → 空闲等待
     /// 2) 星穹铁道注册表解锁（与进程无关，按需核对）
     /// 3) 无游戏 → 长间隔轮询
     /// 4) 已注入同 PID → 保活推送 IPC
@@ -19,8 +40,8 @@ internal sealed partial class UnlockService
     private async Task WatchLoopAsync(CancellationToken token)
     {
         // 空闲间隔更长以降 CPU；游戏运行时用较短间隔
-        var idlePoll = Math.Clamp(_config.PollIntervalMs, 500, 5000);
-        var activePoll = Math.Clamp(Math.Min(_config.PollIntervalMs, 800), 300, 2000);
+        var idlePoll = GamePollingPolicy.WatchIdleIntervalMs(_config.PollIntervalMs);
+        var activePoll = GamePollingPolicy.WatchActiveIntervalMs(_config.PollIntervalMs);
 
         while (!token.IsCancellationRequested)
         {
@@ -31,15 +52,6 @@ internal sealed partial class UnlockService
                     PushConfigToIpc();
                     SetAttached(null, 0);
                     SetStatus("总开关已关闭 — 后台待命（不注入）");
-                    await Task.Delay(idlePoll, token);
-                    continue;
-                }
-
-                if (!_config.AutoWatch)
-                {
-                    PushConfigToIpc();
-                    SetAttached(null, 0);
-                    SetStatus("自动监视已关闭 — 可在托盘重新开启");
                     await Task.Delay(idlePoll, token);
                     continue;
                 }
@@ -240,7 +252,7 @@ internal sealed partial class UnlockService
                 // 注入前重置 Stub 状态字段，并推送最新 Host 配置（勿整块乱序写）
                 _config.Sanitize();
                 var activeUnlock = profile.Enabled && !descriptor.FpsViaRegistry;
-                var featuresActive = _config.MasterEnabled && _config.AutoWatch;
+                var featuresActive = _config.MasterEnabled;
                 _ipc.ResetForNewInject(profile.TargetFps, activeUnlock,
                     featuresActive && profile.AntiBlurPerspective,
                     featuresActive && descriptor.SupportsDiveMosaic && profile.AntiBlurDiveMosaic,
@@ -334,7 +346,7 @@ internal sealed partial class UnlockService
 
                 // 游戏运行期间保活（PushConfigToIpc 内部已节流）
                 var processExited = false;
-                while (!token.IsCancellationRequested && _config.MasterEnabled && _config.AutoWatch)
+                while (!token.IsCancellationRequested && _config.MasterEnabled)
                 {
                     try
                     {
@@ -375,7 +387,7 @@ internal sealed partial class UnlockService
                         session.RegistryStatus = "游戏未运行 — 启动后会自动核对注册表";
                 }
                 // 暂停时保留已经加载的 DLL 连接；重新开启不应重置其 Ready 状态。
-                if (_config.MasterEnabled && _config.AutoWatch)
+                if (_config.MasterEnabled)
                     session.InjectAttemptedPid = 0;
                 await Task.Delay(250, token);
             }
@@ -400,16 +412,31 @@ internal sealed partial class UnlockService
     /// </summary>
     private Process? FindRunningGame(out GameId? game)
     {
-        var order = new List<GameDescriptor>();
-        if (AttachedGame is GameId attached) order.Add(GameCatalog.Get(attached));
-        order.Add(GameCatalog.Get(_config.ActiveGame));
-        foreach (var descriptor in GameCatalog.All)
+        var attached = AttachedGame;
+        if (attached is GameId attachedGame)
         {
-            if (!order.Contains(descriptor)) order.Add(descriptor);
+            var process = GameProcess.Find(GameCatalog.Get(attachedGame));
+            if (process is not null)
+            {
+                game = attachedGame;
+                return process;
+            }
         }
 
-        foreach (var descriptor in order)
+        var selected = _config.ActiveGame;
+        if (selected != attached)
         {
+            var process = GameProcess.Find(GameCatalog.Get(selected));
+            if (process is not null)
+            {
+                game = selected;
+                return process;
+            }
+        }
+
+        foreach (var descriptor in GameCatalog.All)
+        {
+            if (descriptor.Id == attached || descriptor.Id == selected) continue;
             var process = GameProcess.Find(descriptor);
             if (process is null) continue;
             game = descriptor.Id;
@@ -501,18 +528,68 @@ internal sealed partial class UnlockService
     /// </summary>
     private void SetRunning(GameId game, int pid)
     {
-        var flickerWindowMs = Math.Clamp(_config.PollIntervalMs * 3, 3000, 15000);
+        var flickerWindowMs = GamePollingPolicy.RunningFlickerWindowMs(_config.PollIntervalMs);
         _runningSessions.Observe(
             game, pid, DateTime.UtcNow.Ticks, TimeSpan.FromMilliseconds(flickerWindowMs).Ticks);
-        Volatile.Write(ref _runningGameValue, EncodeGame(game));
     }
 
     /// <summary>清除运行状态；保留运行会话号与最后见到的 PID，供托盘判定抖动。</summary>
     private void ClearRunning()
     {
         _runningSessions.Clear(DateTime.UtcNow.Ticks);
-        Volatile.Write(ref _runningGameValue, 0);
     }
+
+    /// <summary>
+    /// 独立轮询每款游戏的进程状态，供游戏库和各游戏状态卡实时显示。
+    /// 这里不复用共享 IPC 的附着状态，因为星铁无需注入，原神也可能尚未附着。
+    /// </summary>
+    private bool RefreshRunningPids()
+    {
+        var genshinPid = ReadRunningPid(GameCatalog.Genshin);
+        var starRailPid = ReadRunningPid(GameCatalog.StarRail);
+        var changed = WriteRunningPid(GameId.Genshin, genshinPid);
+        changed |= WriteRunningPid(GameId.StarRail, starRailPid);
+
+        var runningGame = SelectRunningGame(genshinPid, starRailPid);
+        var runningValue = runningGame is GameId game ? EncodeGame(game) : 0;
+        if (Volatile.Read(ref _runningGameValue) != runningValue)
+        {
+            Volatile.Write(ref _runningGameValue, runningValue);
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    private static int ReadRunningPid(GameDescriptor descriptor)
+    {
+        using var process = GameProcess.Find(descriptor);
+        if (process is null) return 0;
+        try { return process.HasExited ? 0 : process.Id; }
+        catch { return 0; }
+    }
+
+    private bool WriteRunningPid(GameId game, int pid)
+    {
+        var session = _sessions[game];
+        if (Volatile.Read(ref session.RunningPid) == pid) return false;
+        Volatile.Write(ref session.RunningPid, pid);
+        return true;
+    }
+
+    private GameId? SelectRunningGame(int genshinPid, int starRailPid)
+    {
+        if (AttachedGame is GameId attached && IsRunning(attached, genshinPid, starRailPid))
+            return attached;
+        if (IsRunning(_config.ActiveGame, genshinPid, starRailPid))
+            return _config.ActiveGame;
+        if (genshinPid > 0) return GameId.Genshin;
+        if (starRailPid > 0) return GameId.StarRail;
+        return null;
+    }
+
+    private static bool IsRunning(GameId game, int genshinPid, int starRailPid) =>
+        game == GameId.Genshin ? genshinPid > 0 : starRailPid > 0;
 
     /// <summary>
     /// 统一维护附着状态：同时把「系统保持唤醒」的请求绑定到游戏是否真的在跑。

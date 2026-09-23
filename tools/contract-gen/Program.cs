@@ -78,8 +78,55 @@ internal static class ContractGenerator
             output.AppendLine();
         }
 
+        output.AppendLine(GenerateGameDefinitions());
+
         return output.ToString().Replace("\r\n", "\n").TrimEnd() + "\n";
     }
+
+    private static string GenerateGameDefinitions()
+    {
+        var output = new StringBuilder();
+        output.AppendLine("export interface GameDefinition {");
+        output.AppendLine("  id: GameId;");
+        output.AppendLine("  key: string;");
+        output.AppendLine("  displayName: string;");
+        output.AppendLine("  shortName: string;");
+        output.AppendLine("  processNames: readonly string[];");
+        output.AppendLine("  executableNames: readonly string[];");
+        output.AppendLine("  stubFileName: string;");
+        output.AppendLine("  fpsViaRegistry: boolean;");
+        output.AppendLine("  lockedFps: number;");
+        output.AppendLine("  supportsDiveMosaic: boolean;");
+        output.AppendLine("}");
+        output.AppendLine();
+        output.AppendLine("export const GAME_CATALOG = {");
+        foreach (var game in GameDefinitions.All)
+        {
+            var key = ToTsGameId(game.Id);
+            if (!string.Equals(game.Key, key, StringComparison.Ordinal))
+                throw new InvalidOperationException($"游戏目录 key 与 GameId 不一致: {game.Key} != {key}");
+            output.AppendLine($"  {key}: {{");
+            output.AppendLine($"    id: '{Escape(ToTsGameId(game.Id))}',");
+            output.AppendLine($"    key: '{Escape(game.Key)}',");
+            output.AppendLine($"    displayName: '{Escape(game.DisplayName)}',");
+            output.AppendLine($"    shortName: '{Escape(game.ShortName)}',");
+            output.AppendLine($"    processNames: [{string.Join(", ", game.ProcessNames.Select(value => $"'{Escape(value)}'"))}],");
+            output.AppendLine($"    executableNames: [{string.Join(", ", game.ExecutableNames.Select(value => $"'{Escape(value)}'"))}],");
+            output.AppendLine($"    stubFileName: '{Escape(game.StubFileName)}',");
+            output.AppendLine($"    fpsViaRegistry: {game.FpsViaRegistry.ToString().ToLowerInvariant()},");
+            output.AppendLine($"    lockedFps: {game.LockedFps},");
+            output.AppendLine($"    supportsDiveMosaic: {game.SupportsDiveMosaic.ToString().ToLowerInvariant()},");
+            output.AppendLine("  },");
+        }
+        output.AppendLine("} as const satisfies Record<GameId, GameDefinition>;");
+        output.AppendLine();
+        output.AppendLine($"export const DEFAULT_GAME_ID: GameId = '{Escape(ToTsGameId(GameDefinitions.DefaultGame))}';");
+        output.AppendLine("export const GAME_IDS = Object.keys(GAME_CATALOG) as GameId[];");
+        return output.ToString().TrimEnd();
+    }
+
+    private static string ToTsGameId(GameId game) =>
+        game.GetType().GetField(game.ToString())?.GetCustomAttribute<TsValueAttribute>()?.Value ?? game.ToString();
 
     private static string GenerateEnum(Type type)
     {

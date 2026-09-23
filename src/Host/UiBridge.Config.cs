@@ -157,7 +157,7 @@ internal sealed partial class UiBridge
         }
 
         SetBool(root, "masterEnabled", v => _config.MasterEnabled = v);
-        SetBool(root, "autoWatch", v => _config.AutoWatch = v);
+        SetBool(root, "autoWatch", _ => _config.AutoWatch = true);
         SetBool(root, "startMinimized", v => _config.StartMinimized = v);
         SetBool(root, "autoStartWithWindows", v => _config.AutoStartWithWindows = v);
         SetBool(root, "autoStartAsAdministrator", v => _config.AutoStartAsAdministrator = v);

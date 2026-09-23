@@ -1,13 +1,13 @@
 namespace GenshinFpsUnlocker.Host;
 
 /// <summary>
-/// 托盘自动跟随的纯状态机：只决定「什么时候把展示游戏切到运行中的那款 /
-/// 游戏退出后什么时候回退」，不碰 WinForms，便于覆盖「手动查看不打断退出回退」等回归场景。
+/// 托盘游戏页面策略：启动时跟随运行中的游戏，所有游戏都退出后统一回到默认页，
+/// 不依赖启动前选择的配置页，也不碰 WinForms。
 /// 运行状态刚变为空时只给出待确认信号，由调用方延迟一段时间再调用
 /// <see cref="ConfirmExit"/>，避免监视循环单次检测失败造成误回退。
 ///
 /// 输入来自 <see cref="UnlockService"/>：运行会话号在出现新的游戏进程 PID 时 +1。
-/// 自动跟随只改展示游戏，不改用户保存的选择；若退出时仍停留在跟随页，则回到原神默认页。
+/// 页面自动切换只改展示游戏，不改用户保存的选择；进程退出后统一回到目录定义的默认页。
 /// </summary>
 internal sealed class TrayGameFollowState
 {
@@ -18,8 +18,8 @@ internal sealed class TrayGameFollowState
     internal readonly record struct Decision(
         bool Switch, GameId Game, bool IsFollow, bool IsRestore, bool NeedsExitConfirm);
 
-    /// <summary>当前自动跟随的那款游戏（null = 没有跟随）。</summary>
-    private GameId? _followedGame;
+    /// <summary>当前运行会话的游戏（即使页面原本已选中该游戏也要跟踪退出）。</summary>
+    private GameId? _sessionGame;
     /// <summary>等待退出确认的游戏：运行状态短暂抖动时不能立即回退。</summary>
     private GameId? _pendingExitGame;
     /// <summary>已经处理过的运行会话号。</summary>
@@ -27,20 +27,18 @@ internal sealed class TrayGameFollowState
 
     public Decision Update(int runningSession, GameId? runningGame, GameId displayGame)
     {
-        // 新的游戏进程会话：自动跟随一次；用户当前展示的就是它则不必切换。
+        // 新进程会话总是登记退出跟踪；仅当页面不同于正在运行的游戏时切换页面。
         if (runningSession != _seenSession)
         {
             _seenSession = runningSession;
             _pendingExitGame = null;
+            _sessionGame = runningGame;
             if (runningGame is GameId game)
             {
                 if (displayGame != game)
                 {
-                    _followedGame = game;
                     return new Decision(true, game, IsFollow: true, IsRestore: false, NeedsExitConfirm: false);
                 }
-                // 展示已经是这款：如果之前跟随的是别的游戏，旧关系作废。
-                if (_followedGame != game) _followedGame = null;
             }
             return default;
         }
@@ -53,9 +51,9 @@ internal sealed class TrayGameFollowState
         }
 
         // 运行状态变为空时先等待确认，避免一次检测失败就误触发页面回退。
-        if (_followedGame is GameId followed && _pendingExitGame != followed)
+        if (_sessionGame is GameId sessionGame && _pendingExitGame != sessionGame)
         {
-            _pendingExitGame = followed;
+            _pendingExitGame = sessionGame;
             return new Decision(false, default, false, false, NeedsExitConfirm: true);
         }
         return default;
@@ -63,7 +61,7 @@ internal sealed class TrayGameFollowState
 
     /// <summary>
     /// 退出确认：调用方在延迟窗口结束后再次询问。运行已恢复则不回退；
-    /// 页面仍停留在自动跟随的游戏时，才回到原神默认页，避免覆盖用户手动切换。
+    /// 会话确认结束后统一回到目录定义的默认页，无论当前展示哪款游戏。
     /// </summary>
     public Decision ConfirmExit(GameId? runningGame, GameId displayGame)
     {
@@ -72,12 +70,12 @@ internal sealed class TrayGameFollowState
             _pendingExitGame = null;
             return default;
         }
-        if (_pendingExitGame is not GameId exited || _followedGame != exited) return default;
+        if (_pendingExitGame is not GameId exited || _sessionGame != exited) return default;
 
         _pendingExitGame = null;
-        _followedGame = null;
-        if (displayGame == exited && exited != GameId.Genshin)
-            return new Decision(true, GameId.Genshin, IsFollow: false, IsRestore: true, NeedsExitConfirm: false);
+        _sessionGame = null;
+        if (displayGame != GameCatalog.DefaultGame)
+            return new Decision(true, GameCatalog.DefaultGame, IsFollow: false, IsRestore: true, NeedsExitConfirm: false);
         return default;
     }
 }

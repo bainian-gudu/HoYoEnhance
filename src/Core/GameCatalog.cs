@@ -62,50 +62,62 @@ internal sealed class GameDescriptor
 /// <summary>受支持游戏的静态目录（唯一事实来源）。</summary>
 internal static class GameCatalog
 {
+    /// <summary>应用级默认游戏：没有运行会话或会话结束后的展示页。</summary>
+    public static GameId DefaultGame => GameDefinitions.DefaultGame;
+
     /// <summary>原神：注入 FpsUnlockerStub.dll 解锁帧率并做画面效果。</summary>
     public static readonly GameDescriptor Genshin = new()
     {
-        Id = GameId.Genshin,
-        Key = "genshin",
-        DisplayName = "原神",
-        ShortName = "原神",
-        ProcessNames = ["YuanShen", "GenshinImpact"],
-        ExeNames = ["YuanShen.exe", "GenshinImpact.exe"],
-        StubFileName = "FpsUnlockerStub.dll",
+        Id = GameDefinitions.Genshin.Id,
+        Key = GameDefinitions.Genshin.Key,
+        DisplayName = GameDefinitions.Genshin.DisplayName,
+        ShortName = GameDefinitions.Genshin.ShortName,
+        ProcessNames = GameDefinitions.Genshin.ProcessNames,
+        ExeNames = GameDefinitions.Genshin.ExecutableNames.Select(name => name + ".exe").ToArray(),
+        StubFileName = GameDefinitions.Genshin.StubFileName,
         UnityLogFolders = ["Genshin Impact", "原神"],
         InstallRootNames = ["Genshin Impact", "GenshinImpact", "Yuanshen", "原神", "miHoYo", "HoYoVerse"],
         ArtifactDataFolders = ["GenshinImpact_Data", "YuanShen_Data"],
         ShortcutHints = ["原神", "Yuanshen", "Genshin", "HoYo", "米哈游", "miHoYo"],
         UninstallKeywords = ["Genshin", "原神", "YuanShen"],
-        FpsViaRegistry = false,
-        LockedFps = 0,
-        SupportsDiveMosaic = true,
+        FpsViaRegistry = GameDefinitions.Genshin.FpsViaRegistry,
+        LockedFps = GameDefinitions.Genshin.LockedFps,
+        SupportsDiveMosaic = GameDefinitions.Genshin.SupportsDiveMosaic,
     };
 
     /// <summary>崩坏：星穹铁道：帧率写注册表（只支持 120），画面效果走 StarRailStub.dll。</summary>
     public static readonly GameDescriptor StarRail = new()
     {
-        Id = GameId.StarRail,
-        Key = "starRail",
-        DisplayName = "崩坏：星穹铁道",
-        ShortName = "星穹铁道",
-        ProcessNames = ["StarRail"],
-        ExeNames = ["StarRail.exe"],
-        StubFileName = "StarRailStub.dll",
+        Id = GameDefinitions.StarRail.Id,
+        Key = GameDefinitions.StarRail.Key,
+        DisplayName = GameDefinitions.StarRail.DisplayName,
+        ShortName = GameDefinitions.StarRail.ShortName,
+        ProcessNames = GameDefinitions.StarRail.ProcessNames,
+        ExeNames = GameDefinitions.StarRail.ExecutableNames.Select(name => name + ".exe").ToArray(),
+        StubFileName = GameDefinitions.StarRail.StubFileName,
         UnityLogFolders = ["Star Rail", "崩坏：星穹铁道", "StarRail"],
         InstallRootNames = ["Star Rail", "StarRail", "崩坏：星穹铁道", "miHoYo", "HoYoVerse", "HoYoPlay"],
         ArtifactDataFolders = ["StarRail_Data"],
         ShortcutHints = ["星穹铁道", "星铁", "StarRail", "HoYo", "米哈游", "miHoYo"],
         UninstallKeywords = ["Star Rail", "StarRail", "崩坏：星穹铁道", "星穹铁道"],
-        FpsViaRegistry = true,
-        LockedFps = 120,
-        SupportsDiveMosaic = false,
+        FpsViaRegistry = GameDefinitions.StarRail.FpsViaRegistry,
+        LockedFps = GameDefinitions.StarRail.LockedFps,
+        SupportsDiveMosaic = GameDefinitions.StarRail.SupportsDiveMosaic,
     };
 
     /// <summary>全部游戏，顺序即界面与日志里的默认顺序。</summary>
-    public static readonly IReadOnlyList<GameDescriptor> All = [Genshin, StarRail];
+    private static readonly IReadOnlyDictionary<GameId, GameDescriptor> ById =
+        new Dictionary<GameId, GameDescriptor>
+        {
+            [Genshin.Id] = Genshin,
+            [StarRail.Id] = StarRail,
+        };
 
-    public static GameDescriptor Get(GameId id) => id == GameId.StarRail ? StarRail : Genshin;
+    public static readonly IReadOnlyList<GameDescriptor> All =
+        GameDefinitions.All.Select(definition => ById[definition.Id]).ToArray();
+
+    public static GameDescriptor Get(GameId id) =>
+        ById.TryGetValue(id, out var game) ? game : ById[DefaultGame];
 
     /// <summary>配置键 → 游戏；不认识的键返回 false（调用方保持原值）。</summary>
     public static bool TryParseKey(string? key, out GameId id)
@@ -118,7 +130,7 @@ internal static class GameCatalog
                 return true;
             }
         }
-        id = GameId.Genshin;
+        id = DefaultGame;
         return false;
     }
 

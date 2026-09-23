@@ -16,7 +16,6 @@ internal sealed partial class MainForm
     private ToolStripMenuItem? _trayGameStarRailItem;
     private ToolStripMenuItem? _trayLaunchItem;
     private ToolStripMenuItem? _trayEnabledItem;
-    private ToolStripMenuItem? _trayAutoWatchItem;
     private ToolStripMenuItem? _trayAntiBlurPerspectiveItem;
     private ToolStripMenuItem? _trayAntiBlurDiveMosaicItem;
     private ToolStripMenuItem? _trayHideUidItem;
@@ -59,9 +58,9 @@ internal sealed partial class MainForm
 
     /// <summary>
     /// 托盘热切换：游戏进程启动的那一下自动切到它（菜单、提示、界面一起换），
-    /// 退出时仍停留在跟随页则回到原神默认页。跟随只认运行会话号，
+    /// 所有游戏退出后由状态机统一回到目录定义的默认页。切页策略只认运行会话号，
     /// 运行状态的短暂抖动不会重复触发、也不会误触发退出回退；
-    /// 用户中途手动切换展示页时，退出回退不会覆盖该选择。
+    /// 不论启动前或运行期间切换过哪一页，游戏退出后的默认页保持一致。
     /// 跟随只改展示游戏（<see cref="UnlockService.DisplayGame"/>），不覆盖用户选择。
     /// </summary>
     private void SyncTrayGameFollow()
@@ -93,7 +92,7 @@ internal sealed partial class MainForm
         }
         _trayFollowExitTimer.Stop();
         // 至少覆盖一轮监视间隔；最长 5 秒，避免游戏真退出后回退太慢。
-        _trayFollowExitTimer.Interval = Math.Clamp(_config.PollIntervalMs * 2, 1000, 5000);
+        _trayFollowExitTimer.Interval = GamePollingPolicy.ExitConfirmationIntervalMs(_config.PollIntervalMs);
         _trayFollowExitTimer.Start();
     }
 
@@ -147,7 +146,6 @@ internal sealed partial class MainForm
                 : $"{descriptor.ShortName}  ·  帧率解锁已关闭  ·  {profile.TargetFps} FPS";
         if (descriptor.FpsViaRegistry)
             return $"{descriptor.ShortName}  ·  注册表解锁  ·  固定 {profile.TargetFps} FPS";
-        if (_config.AutoWatch) return $"{descriptor.ShortName}  ·  自动监视中  ·  {profile.TargetFps} FPS";
         return $"{descriptor.ShortName}  ·  已就绪  ·  {profile.TargetFps} FPS";
     }
 
@@ -195,9 +193,7 @@ internal sealed partial class MainForm
         }
         else
         {
-            status = _config.AutoWatch
-                ? $"{descriptor.ShortName} · 监视中 · {profile.TargetFps} FPS"
-                : $"{descriptor.ShortName} · 待命中 · {profile.TargetFps} FPS";
+            status = $"{descriptor.ShortName} · 已就绪 · {profile.TargetFps} FPS";
         }
 
         var text = AppPaths.ProductDisplayName + Environment.NewLine + status;
@@ -211,7 +207,7 @@ internal sealed partial class MainForm
     /// <summary>
     /// 当前游戏画面效果的一行状态：只列已开启的功能；附着且功能生效时按 Stub 回报的
     /// 位掩码标注就绪情况（✓ 已就绪 / … 等待适配或尚未生效），未附着时只报配置。
-    /// 总开关或自动监视关闭时注入不会下发，直接报「注入已暂停」。
+    /// 总开关关闭时注入不会下发，直接报「注入已暂停」。
     /// </summary>
     private string BuildInjectionTipLine(int pid)
     {
@@ -221,7 +217,7 @@ internal sealed partial class MainForm
                          || (descriptor.SupportsDiveMosaic && profile.AntiBlurDiveMosaic);
         if (!anyEnabled) return string.Empty;
 
-        var active = _config.MasterEnabled && _config.AutoWatch;
+        var active = _config.MasterEnabled;
         if (!active) return "注入已暂停";
 
         var attached = pid > 0 && _service.AttachedGame == descriptor.Id;
@@ -312,9 +308,6 @@ internal sealed partial class MainForm
                     // 总开关关闭时仍允许改勾选，但状态头会提示暂停
                     _trayEnabledItem.Enabled = true;
                 }
-                if (_trayAutoWatchItem is not null)
-                    _trayAutoWatchItem.Checked = _config.AutoWatch;
-
                 // 画面效果项：星穹铁道没有「水下马赛克」；反虚化与隐藏 UID 的
                 // 显示名 / 悬停说明两款游戏统一。
                 if (_trayAntiBlurPerspectiveItem is not null)

@@ -109,15 +109,32 @@ internal static class TrayGameFollowStateTests
                 "运行恢复后确认退出不应切换");
         });
 
-        h.Case("用户本来就选着星铁，退出不改变选择", () =>
+        h.Case("星铁页启动星铁，退出后统一回原神默认页", () =>
         {
             var state = new TrayGameFollowState();
             var follow = state.Update(1, GameId.StarRail, GameId.StarRail);
             Harness.False(follow.Switch, "展示已经是星铁，不需要跟随");
 
-            var exited = state.Update(1, null, GameId.StarRail);
-            Harness.False(exited.NeedsExitConfirm, "没有发生自动跟随时不应进入退出确认");
-            Harness.False(exited.Switch, "没有发生自动跟随时不应改变用户选择");
+            var pending = state.Update(1, null, GameId.StarRail);
+            Harness.True(pending.NeedsExitConfirm, "即使启动页与游戏一致也要跟踪退出");
+
+            var restore = state.ConfirmExit(null, GameId.StarRail);
+            Harness.True(restore.Switch, "星铁退出后应切回默认页");
+            Harness.Equal(GameId.Genshin, restore.Game, "默认页统一为原神");
+        });
+
+        h.Case("原神页启动原神后手动切到星铁，退出仍统一回原神", () =>
+        {
+            var state = new TrayGameFollowState();
+            state.Update(1, GameId.Genshin, GameId.Genshin);
+            state.Update(1, GameId.Genshin, GameId.StarRail);
+
+            var pending = state.Update(1, null, GameId.StarRail);
+            Harness.True(pending.NeedsExitConfirm, "未自动切页的运行会话也要跟踪退出");
+
+            var restore = state.ConfirmExit(null, GameId.StarRail);
+            Harness.True(restore.Switch, "会话结束后应统一切回默认页");
+            Harness.Equal(GameId.Genshin, restore.Game, "默认页不取决于退出前的页面");
         });
 
         h.Case("星铁重启（新进程会话）重新跟随一次", () =>
@@ -133,20 +150,21 @@ internal static class TrayGameFollowStateTests
             Harness.True(second.IsFollow, "应标记为跟随");
         });
 
-        h.Case("新进程换成另一款游戏时旧跟随关系作废", () =>
+        h.Case("新游戏会话替换旧会话并继续跟踪退出", () =>
         {
             var state = new TrayGameFollowState();
             state.Update(1, GameId.StarRail, GameId.Genshin);
             state.Update(1, null, GameId.StarRail);
             state.ConfirmExit(null, GameId.StarRail);
 
-            // 原神启动：展示已经是原神，不需要跟随，旧的星铁跟随关系应作废。
+            // 原神启动：展示已经是原神，不需要切页，但必须登记新会话。
             var genshinStart = state.Update(2, GameId.Genshin, GameId.Genshin);
-            Harness.False(genshinStart.Switch, "展示已经是原神，不需要跟随");
+            Harness.False(genshinStart.Switch, "展示已经是原神，不需要切页");
 
             var genshinExit = state.Update(2, null, GameId.Genshin);
-            Harness.False(genshinExit.NeedsExitConfirm, "旧跟随关系已作废，不应进入退出确认");
-            Harness.False(genshinExit.Switch, "用户选择就是原神，退出后保持不动");
+            Harness.True(genshinExit.NeedsExitConfirm, "新会话也应进入退出确认");
+            var restore = state.ConfirmExit(null, GameId.Genshin);
+            Harness.False(restore.Switch, "默认页已是原神，无需重复切页");
         });
 
         h.Case("星铁重启时保留跟随关系，退出仍回原神", () =>

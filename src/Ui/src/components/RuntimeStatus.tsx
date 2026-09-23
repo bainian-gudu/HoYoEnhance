@@ -2,6 +2,7 @@
 import { Activity, ChevronRight } from 'lucide-react';
 import type { AppState } from '../hooks/useAppState';
 import { GAME_META } from '../lib/config';
+import { gameRuntimeState } from '../lib/gameRuntime';
 import { runtimeFpsText } from '../lib/runtimeStatus';
 
 type Tone = 'on' | 'wait' | 'off';
@@ -34,14 +35,15 @@ function stubText(status: number, lastError: number): string {
 }
 
 export function RuntimeStatus({ app }: { app: AppState }) {
-  const { config, gameConfig, activeGame, runningGame, attachedGame, currentFps, attachedPid, stubStatus, stubLastError, antiBlurState, hideUidState, starRailRegistryFps, navigate } = app;
+  const { config, gameConfig, activeGame, runningGame, runningPids, attachedGame, currentFps, attachedPid, stubStatus, stubLastError, antiBlurState, hideUidState, starRailRegistryFps, navigate } = app;
   const injection = GAME_META[activeGame].injection;
   const registryFps = GAME_META[activeGame].fpsLock?.value;
 
   // 宿主只有一份运行状态：只认「本页这款游戏」，另一款游戏正在跑也一律显示等待启动。
-  const running = runningGame === activeGame;
-  const attached = attachedGame === activeGame;
-  const featuresActive = config.masterEnabled && config.autoWatch;
+  const runtime = gameRuntimeState(activeGame, { runningGame, runningPids, attachedGame, attachedPid });
+  const running = runtime.running;
+  const attached = runtime.attached;
+  const featuresActive = config.masterEnabled;
 
   const rows = [
     {
@@ -56,7 +58,7 @@ export function RuntimeStatus({ app }: { app: AppState }) {
         targetFps: gameConfig.targetFps,
       }),
     },
-    { label: '游戏进程', title: undefined, value: !running ? '未检测到游戏' : attached ? `已附加 · PID ${attachedPid}` : '运行中（未注入）' },
+    { label: '游戏进程', title: undefined, value: !running ? '未检测到游戏' : attached ? `已附加 · PID ${runtime.pid || '—'}` : '运行中（未注入）' },
     {
       label: '解锁模块',
       title: injection.module,

@@ -54,10 +54,8 @@ export function GuidePage({ game, navigate, onSafety, isNative }: { game: GameId
       ? { title: '写入 120 FPS', text: '星穹铁道走注册表解锁，固定 120 FPS、不注入游戏进程；开启后会自动检查注册表，必要时写入 120。', action: '查看帧率设置', page: 'overview' as Page }
       : { title: '选择适合的帧率', text: '推荐从 120 FPS 开始，根据显示器刷新率与设备性能进行调整。', action: '调整目标帧率', page: 'overview' as Page },
     {
-      title: '让每一帧，自在流动',
-      text: isNative
-        ? '开启自动解锁后，检测到游戏启动将自动应用帧率。关闭窗口会驻留托盘，后台继续监视。'
-        : '开启自动解锁，桌面版会在检测到游戏启动后应用设置。网页中可以体验启动演示。',
+      title: '按需调整配置',
+      text: '切换到游戏概览，为不同游戏分别设置帧率与画面效果。',
     },
   ];
   return <>
