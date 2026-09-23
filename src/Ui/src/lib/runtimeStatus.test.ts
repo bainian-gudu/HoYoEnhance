@@ -46,6 +46,17 @@ describe('runtimeFpsText', () => {
     })).toBe('注册表当前设置 60 FPS');
   });
 
+  it('星铁未运行时也只显示注册表配置值', () => {
+    expect(runtimeFpsText({
+      running: false,
+      attached: false,
+      registryBased: true,
+      registryFps: 60,
+      currentFps: 0,
+      targetFps: 120,
+    })).toBe('注册表当前设置 60 FPS');
+  });
+
   it('原神附着时显示 Stub 的实时反馈', () => {
     expect(runtimeFpsText({
       running: true,

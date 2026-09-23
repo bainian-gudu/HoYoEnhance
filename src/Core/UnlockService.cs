@@ -182,6 +182,10 @@ internal sealed partial class UnlockService : IDisposable
         try { RefreshGamePath(GameId.Genshin, autoLocateIfMissing: false); } catch (Exception ex) { AppLog.Warn(ex.Message); }
         try { RefreshGamePath(GameId.StarRail, autoLocateIfMissing: false); } catch (Exception ex) { AppLog.Warn(ex.Message); }
         try { PushConfigToIpc(force: true); } catch (Exception ex) { AppLog.Warn(ex.Message); }
+
+        var registry = StarRailFpsRegistry.Read();
+        _sessions[GameId.StarRail].RegistryCurrentFps = registry.CurrentFps;
+        _sessions[GameId.StarRail].RegistryStatus = registry.Detail;
     }
 
     /// <summary>启动后台监视循环（线程池 Task）。</summary>
@@ -193,8 +197,8 @@ internal sealed partial class UnlockService : IDisposable
 
     /// <summary>
     /// 用户手动切换当前正在配置的游戏（界面三个游戏页与托盘一起换）。
-    /// 切到「正在运行」的那款属于临时查看：只改展示，不写用户保存的选择，
-    /// 游戏退出后托盘会回到自动跟随前的游戏；切到未运行的游戏才记为新的用户选择。
+    /// 切到「正在运行」的那款属于临时查看：只改展示，不写用户保存的选择；
+    /// 自动跟随后若退出时仍停留在跟随页，会回到原神默认页。切到未运行的游戏才保存为新选择。
     /// 游戏启动时的自动跟随请用 <see cref="SetDisplayGame"/>。
     /// </summary>
     public void SetActiveGame(GameId game)
@@ -219,8 +223,8 @@ internal sealed partial class UnlockService : IDisposable
     }
 
     /// <summary>
-    /// 自动跟随运行中的游戏：只切换界面 / 托盘的展示游戏，不写配置、不改变
-    /// 用户选择，因此游戏退出后可以安全回退到启动前的展示游戏。
+    /// 自动跟随运行中的游戏：只切换界面 / 托盘展示，不写配置或改变用户选择；
+    /// 游戏退出后由托盘状态机回到原神默认页。
     /// </summary>
     public void SetDisplayGame(GameId game)
     {
@@ -475,11 +479,10 @@ internal sealed partial class UnlockService : IDisposable
         if (!_config.MasterEnabled || !profile.Enabled)
         {
             session.RegistryCheckPending = false;
-            session.RegistryCurrentFps = null;
-            session.RegistryStatus = _config.MasterEnabled
-                ? "帧率解锁已关闭：未检查注册表"
-                : "总开关已关闭：未检查注册表";
-            return new StarRailFpsResult(StarRailFpsOutcome.ValueMissing, null, null, session.RegistryStatus);
+            var current = StarRailFpsRegistry.Read();
+            session.RegistryCurrentFps = current.CurrentFps;
+            session.RegistryStatus = current.Detail;
+            return current;
         }
 
         if (!force && !session.RegistryCheckPending)

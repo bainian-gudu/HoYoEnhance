@@ -59,9 +59,9 @@ internal sealed partial class MainForm
 
     /// <summary>
     /// 托盘热切换：游戏进程启动的那一下自动切到它（菜单、提示、界面一起换），
-    /// 游戏退出后回到启动前展示的那款（默认原神）。跟随只认运行会话号，
+    /// 退出时仍停留在跟随页则回到原神默认页。跟随只认运行会话号，
     /// 运行状态的短暂抖动不会重复触发、也不会误触发退出回退；
-    /// 用户中途手动查看哪款都不改变「退出后回到跟随前游戏」这个目标。
+    /// 用户中途手动切换展示页时，退出回退不会覆盖该选择。
     /// 跟随只改展示游戏（<see cref="UnlockService.DisplayGame"/>），不覆盖用户选择。
     /// </summary>
     private void SyncTrayGameFollow()
@@ -69,7 +69,7 @@ internal sealed partial class MainForm
         if (IsDisposed) return;
 
         // 运行状态用「正在运行的游戏 → 已附着的游戏」兜底：监视循环短暂读不到
-        // 进程但 Stub 仍附着时，不能当成退出把托盘切回启动前的游戏。
+        // 进程但 Stub 仍附着时，不能误判游戏退出并触发页面回退。
         var running = _service.RunningGame ?? _service.AttachedGame;
         var decision = _trayFollow.Update(
             _service.RunningSession, running, _service.DisplayGame);

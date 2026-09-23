@@ -54,6 +54,18 @@ internal static class StarRailFpsSettingsTests
             Harness.False(StarRailFpsSettings.TryReadFps("不是 JSON", out _), "非法 JSON 应为假");
         });
 
+        h.Case("解码星铁 REG_BINARY UTF-8 JSON 并清除结尾 NUL", () =>
+        {
+            var bytes = System.Text.Encoding.UTF8.GetBytes("{\"FPS\":60}\0");
+            var json = StarRailFpsSettings.DecodeBinaryValue(bytes);
+            Harness.Equal("{\"FPS\":60}", json, "二进制设置应解码为 JSON，且去掉游戏使用的结尾 NUL");
+            Harness.True(StarRailFpsSettings.TryReadFps(json, out var fps), "解码结果应能读取 FPS");
+            Harness.Equal(60, fps, "二进制注册表中的 FPS");
+
+            var encoded = StarRailFpsSettings.EncodeBinaryValue(json);
+            Harness.True(encoded.SequenceEqual(bytes), "回写二进制值应使用 UTF-8 JSON 和结尾 NUL");
+        });
+
         h.Case("改写 FPS 时其它字段原样保留、原键名大小写不变", () =>
         {
             const string original = "{\"FPS\":60,\"Width\":1920,\"Height\":1080,\"GraphicsQuality\":4}";

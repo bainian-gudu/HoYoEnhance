@@ -5,6 +5,8 @@ namespace GenshinFpsUnlocker.Host;
 /// <summary>星穹铁道注册表解锁的结果类型。</summary>
 internal enum StarRailFpsOutcome
 {
+    /// <summary>成功读取注册表中的当前帧率设置。</summary>
+    ValueRead,
     /// <summary>已经是 120 FPS，本次没有改动注册表。</summary>
     AlreadyAtTarget,
     /// <summary>写入 120 FPS 成功（需要重启游戏生效）。</summary>
@@ -13,7 +15,7 @@ internal enum StarRailFpsOutcome
     ValueMissing,
     /// <summary>值存在但不是可解析的 JSON，或没有 FPS 字段。</summary>
     UnsupportedValue,
-    /// <summary>读写注册表失败（权限 / 键不存在）。</summary>
+    /// <summary>读写注册表失败（例如权限不足）。</summary>
     RegistryError,
 }
 
@@ -21,12 +23,8 @@ internal enum StarRailFpsOutcome
 internal readonly record struct StarRailFpsResult(
     StarRailFpsOutcome Outcome,
     int? CurrentFps,
-    string? ValueName,
     string Detail)
 {
-    /// <summary>是否已经处于目标状态（含本次写入成功）。</summary>
-    public bool Ok => Outcome is StarRailFpsOutcome.AlreadyAtTarget or StarRailFpsOutcome.Written;
-
     /// <summary>本次是否真的改了注册表。</summary>
     public bool Changed => Outcome == StarRailFpsOutcome.Written;
 }
@@ -48,18 +46,21 @@ internal static class StarRailFpsRegistry
     /// <summary>该游戏唯一支持的解锁帧率。</summary>
     public const int TargetFps = 120;
 
-    /// <summary>可能的注册表位置（国服键名是中文；另两个是历史 / 国际服写法）。</summary>
+    /// <summary>覆盖国服、HYP 和国际服可能存放画面设置的注册表项。</summary>
     private static readonly string[] CandidateKeyPaths =
     [
         @"Software\miHoYo\崩坏：星穹铁道",
         @"Software\miHoYo\Star Rail",
         @"Software\miHoYo\StarRail",
+        @"Software\miHoYo\HYP",
         @"Software\Cognosphere\Star Rail",
     ];
 
     /// <summary>读取当前注册表里的帧率设置（不改动）。</summary>
     public static StarRailFpsResult Read()
     {
+        // 不同版本或发行渠道可能留下空别名键，失败时保留原因并继续查其余位置。
+        StarRailFpsResult? lastFailure = null;
         foreach (var path in CandidateKeyPaths)
         {
             try
@@ -69,25 +70,31 @@ internal static class StarRailFpsRegistry
 
                 var target = FindNewestModelValue(key);
                 if (target is null)
-                    return new StarRailFpsResult(StarRailFpsOutcome.ValueMissing, null, null,
-                        $"{path} 下还没有画面设置（GraphicsSettings_Model_h*）：请先启动一次游戏");
+                {
+                    lastFailure = new StarRailFpsResult(StarRailFpsOutcome.ValueMissing, null,
+                        $"{path} 下还没有画面设置（GraphicsSettings_Model_h*）");
+                    continue;
+                }
 
                 var (name, json, _) = target.Value;
                 if (!StarRailFpsSettings.TryReadFps(json, out var fps))
-                    return new StarRailFpsResult(StarRailFpsOutcome.UnsupportedValue, null, name,
+                {
+                    lastFailure = new StarRailFpsResult(StarRailFpsOutcome.UnsupportedValue, null,
                         $"无法从 {name} 解析 FPS 字段");
+                    continue;
+                }
 
-                return new StarRailFpsResult(StarRailFpsOutcome.AlreadyAtTarget, fps, name,
+                return new StarRailFpsResult(StarRailFpsOutcome.ValueRead, fps,
                     $"{name} 当前 {fps} FPS");
             }
             catch (Exception ex)
             {
-                return new StarRailFpsResult(StarRailFpsOutcome.RegistryError, null, null,
+                lastFailure = new StarRailFpsResult(StarRailFpsOutcome.RegistryError, null,
                     $"读取注册表失败：{ex.Message}");
             }
         }
 
-        return new StarRailFpsResult(StarRailFpsOutcome.ValueMissing, null, null,
+        return lastFailure ?? new StarRailFpsResult(StarRailFpsOutcome.ValueMissing, null,
             "注册表里没有找到星穹铁道的画面设置：请先启动一次游戏");
     }
 
@@ -96,6 +103,8 @@ internal static class StarRailFpsRegistry
     /// </summary>
     public static StarRailFpsResult Ensure()
     {
+        // 跳过没有画面值的别名键，继续查找实际保存设置的注册表项。
+        StarRailFpsResult? lastFailure = null;
         foreach (var path in CandidateKeyPaths)
         {
             try
@@ -105,41 +114,49 @@ internal static class StarRailFpsRegistry
 
                 var target = FindNewestModelValue(key);
                 if (target is null)
-                    return new StarRailFpsResult(StarRailFpsOutcome.ValueMissing, null, null,
+                {
+                    lastFailure = new StarRailFpsResult(StarRailFpsOutcome.ValueMissing, null,
                         $"{path} 下还没有画面设置：请先启动一次游戏再开启解锁");
+                    continue;
+                }
 
                 var (name, json, kind) = target.Value;
                 if (!StarRailFpsSettings.TryReadFps(json, out var fps))
-                    return new StarRailFpsResult(StarRailFpsOutcome.UnsupportedValue, null, name,
+                {
+                    lastFailure = new StarRailFpsResult(StarRailFpsOutcome.UnsupportedValue, null,
                         $"无法从 {name} 解析 FPS 字段，已跳过写入");
+                    continue;
+                }
 
                 if (fps == TargetFps)
-                    return new StarRailFpsResult(StarRailFpsOutcome.AlreadyAtTarget, fps, name,
+                    return new StarRailFpsResult(StarRailFpsOutcome.AlreadyAtTarget, fps,
                         $"{name} 已经是 {TargetFps} FPS，未覆盖");
 
                 var updated = StarRailFpsSettings.WriteFps(json, TargetFps);
                 using var writable = Registry.CurrentUser.OpenSubKey(path, writable: true);
                 if (writable is null)
-                    return new StarRailFpsResult(StarRailFpsOutcome.RegistryError, fps, name,
+                    return new StarRailFpsResult(StarRailFpsOutcome.RegistryError, fps,
                         $"注册表项不可写：{path}");
 
-                // 按游戏原本写的类型回写：画面设置出现过 REG_MULTI_SZ 写法，一律写成
-                // REG_SZ 会让游戏读不到，表现为「开关打开了但解锁静默失效」。
-                if (kind == RegistryValueKind.MultiString)
+                // 按游戏原本写的类型回写：REG_BINARY 与 REG_MULTI_SZ 都不能改成 REG_SZ，
+                // 否则游戏可能读不到画面设置。
+                if (kind == RegistryValueKind.Binary)
+                    writable.SetValue(name, StarRailFpsSettings.EncodeBinaryValue(updated), RegistryValueKind.Binary);
+                else if (kind == RegistryValueKind.MultiString)
                     writable.SetValue(name, new[] { updated }, RegistryValueKind.MultiString);
                 else
                     writable.SetValue(name, updated, RegistryValueKind.String);
-                return new StarRailFpsResult(StarRailFpsOutcome.Written, TargetFps, name,
+                return new StarRailFpsResult(StarRailFpsOutcome.Written, TargetFps,
                     $"{name}：{fps} → {TargetFps} FPS（重启游戏后生效）");
             }
             catch (Exception ex)
             {
-                return new StarRailFpsResult(StarRailFpsOutcome.RegistryError, null, null,
+                lastFailure = new StarRailFpsResult(StarRailFpsOutcome.RegistryError, null,
                     $"写入注册表失败：{ex.Message}");
             }
         }
 
-        return new StarRailFpsResult(StarRailFpsOutcome.ValueMissing, null, null,
+        return lastFailure ?? new StarRailFpsResult(StarRailFpsOutcome.ValueMissing, null,
             "注册表里没有找到星穹铁道的画面设置：请先启动一次游戏再开启解锁");
     }
 
@@ -156,6 +173,7 @@ internal static class StarRailFpsRegistry
         {
             string s => s,
             string[] array when array.Length > 0 => array[0],
+            byte[] bytes => StarRailFpsSettings.DecodeBinaryValue(bytes),
             _ => null,
         };
         if (json is null) return null;

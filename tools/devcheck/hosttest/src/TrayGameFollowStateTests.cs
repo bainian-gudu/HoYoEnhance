@@ -8,6 +8,21 @@ internal static class TrayGameFollowStateTests
 {
     public static void Run(Harness h)
     {
+        h.Case("星铁配置页启动原神，原神退出后停在默认原神页", () =>
+        {
+            var state = new TrayGameFollowState();
+
+            var follow = state.Update(1, GameId.Genshin, GameId.StarRail);
+            Harness.True(follow.Switch, "启动原神时应自动切到原神配置页");
+            Harness.Equal(GameId.Genshin, follow.Game, "跟随原神");
+
+            var pending = state.Update(1, null, GameId.Genshin);
+            Harness.True(pending.NeedsExitConfirm, "原神退出应等待确认");
+
+            var restore = state.ConfirmExit(null, GameId.Genshin);
+            Harness.False(restore.Switch, "默认页已经是原神，无需再切换");
+        });
+
         h.Case("星铁启动自动跟随，确认退出后回到原神", () =>
         {
             var state = new TrayGameFollowState();
@@ -46,7 +61,7 @@ internal static class TrayGameFollowStateTests
 
             var restore = state.ConfirmExit(null, GameId.StarRail);
             Harness.True(restore.Switch, "确认退出后应回退");
-            Harness.Equal(GameId.Genshin, restore.Game, "应回到自动跟随前的原神");
+            Harness.Equal(GameId.Genshin, restore.Game, "应回到原神默认页");
             Harness.True(restore.IsRestore, "应标记为回退");
         });
 
@@ -149,7 +164,7 @@ internal static class TrayGameFollowStateTests
 
             var restore = state.ConfirmExit(null, GameId.StarRail);
             Harness.True(restore.Switch, "确认后应回退");
-            Harness.Equal(GameId.Genshin, restore.Game, "应回到自动跟随前的原神");
+            Harness.Equal(GameId.Genshin, restore.Game, "应回到原神默认页");
         });
     }
 }

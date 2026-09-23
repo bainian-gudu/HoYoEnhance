@@ -7,8 +7,7 @@ namespace GenshinFpsUnlocker.Host;
 /// <see cref="ConfirmExit"/>，避免监视循环单次检测失败造成误回退。
 ///
 /// 输入来自 <see cref="UnlockService"/>：运行会话号在出现新的游戏进程 PID 时 +1。
-/// 自动跟随只改展示游戏，不改用户保存的选择；游戏退出时回退到跟随前的展示游戏，
-/// 即使中途用户手动切回运行中的那款也不改变这个回退目标。
+/// 自动跟随只改展示游戏，不改用户保存的选择；若退出时仍停留在跟随页，则回到原神默认页。
 /// </summary>
 internal sealed class TrayGameFollowState
 {
@@ -23,8 +22,6 @@ internal sealed class TrayGameFollowState
     private GameId? _followedGame;
     /// <summary>等待退出确认的游戏：运行状态短暂抖动时不能立即回退。</summary>
     private GameId? _pendingExitGame;
-    /// <summary>跟随之前展示的游戏：游戏退出且当前仍停留在跟随游戏上时回到这里。</summary>
-    private GameId _restoreGame = GameId.Genshin;
     /// <summary>已经处理过的运行会话号。</summary>
     private int _seenSession;
 
@@ -40,7 +37,6 @@ internal sealed class TrayGameFollowState
                 if (displayGame != game)
                 {
                     _followedGame = game;
-                    _restoreGame = displayGame;
                     return new Decision(true, game, IsFollow: true, IsRestore: false, NeedsExitConfirm: false);
                 }
                 // 展示已经是这款：如果之前跟随的是别的游戏，旧关系作废。
@@ -56,8 +52,7 @@ internal sealed class TrayGameFollowState
             return default;
         }
 
-        // 运行状态变为空：先不急着回退，让调用方过一小段时间再确认，
-        // 避免监视循环单次检测失败就把托盘误切回启动前的游戏。
+        // 运行状态变为空时先等待确认，避免一次检测失败就误触发页面回退。
         if (_followedGame is GameId followed && _pendingExitGame != followed)
         {
             _pendingExitGame = followed;
@@ -68,7 +63,7 @@ internal sealed class TrayGameFollowState
 
     /// <summary>
     /// 退出确认：调用方在延迟窗口结束后再次询问。运行已恢复则不回退；
-    /// 仍为空且当前还停留在跟随游戏上，才回退到启动前的展示游戏。
+    /// 页面仍停留在自动跟随的游戏时，才回到原神默认页，避免覆盖用户手动切换。
     /// </summary>
     public Decision ConfirmExit(GameId? runningGame, GameId displayGame)
     {
@@ -81,8 +76,8 @@ internal sealed class TrayGameFollowState
 
         _pendingExitGame = null;
         _followedGame = null;
-        if (displayGame == exited && _restoreGame != exited)
-            return new Decision(true, _restoreGame, IsFollow: false, IsRestore: true, NeedsExitConfirm: false);
+        if (displayGame == exited && exited != GameId.Genshin)
+            return new Decision(true, GameId.Genshin, IsFollow: false, IsRestore: true, NeedsExitConfirm: false);
         return default;
     }
 }

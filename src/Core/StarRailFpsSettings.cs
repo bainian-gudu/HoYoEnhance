@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -17,6 +18,13 @@ internal static class StarRailFpsSettings
 
     /// <summary>设置值里的帧率字段名。</summary>
     public const string FpsPropertyName = "FPS";
+
+    /// <summary>解码 UTF-8 JSON 注册表值，并移除可选 BOM 与游戏附加的 NUL 终止符。</summary>
+    public static string DecodeBinaryValue(byte[] value) =>
+        Encoding.UTF8.GetString(value).TrimStart('\uFEFF').TrimEnd('\0');
+
+    /// <summary>按游戏格式将 JSON 编码为带 NUL 终止符的 UTF-8 二进制值。</summary>
+    public static byte[] EncodeBinaryValue(string json) => Encoding.UTF8.GetBytes(json + "\0");
 
     /// <summary>
     /// 按前缀找出后缀版本号最大的值名；没有匹配时返回 false。
