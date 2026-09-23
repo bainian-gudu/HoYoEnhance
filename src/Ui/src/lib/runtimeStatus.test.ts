@@ -24,6 +24,17 @@ describe('runtimeFpsText', () => {
     })).toBe('注册表帧率尚未确认');
   });
 
+  it('兼容宿主状态缺少注册表帧率字段', () => {
+    expect(runtimeFpsText({
+      running: true,
+      attached: true,
+      registryBased: true,
+      registryFps: undefined,
+      currentFps: 0,
+      targetFps: 120,
+    })).toBe('注册表帧率尚未确认');
+  });
+
   it('星铁注册表实际不是 120 时显示实际值', () => {
     expect(runtimeFpsText({
       running: true,

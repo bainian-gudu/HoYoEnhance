@@ -2,7 +2,7 @@ interface RuntimeFpsTextInput {
   running: boolean;
   attached: boolean;
   registryBased: boolean;
-  registryFps: number | null;
+  registryFps: number | null | undefined;
   currentFps: number;
   targetFps: number;
 }
@@ -17,7 +17,9 @@ export function runtimeFpsText({
   targetFps,
 }: RuntimeFpsTextInput): string {
   if (!running) return '等待游戏启动';
-  if (registryBased) return registryFps === null ? '注册表帧率尚未确认' : `注册表当前设置 ${registryFps} FPS`;
+  if (registryBased) return typeof registryFps !== 'number' || !Number.isFinite(registryFps)
+    ? '注册表帧率尚未确认'
+    : `注册表当前设置 ${registryFps} FPS`;
   if (!attached) return '未注入';
   return currentFps > 0 ? `${currentFps} → ${targetFps} FPS` : `目标 ${targetFps} FPS`;
 }

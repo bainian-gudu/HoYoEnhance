@@ -57,6 +57,7 @@ export function useAppState() {
   const { page, theme, setTheme, sidebarOpen, setSidebarOpen, sidebarRef, navigate } =
     useAppChrome({ native, displayGame, modalOpen: modal !== null });
   const [attachedPid, setAttachedPid] = useState(0);
+  const [starRailRegistryFps, setStarRailRegistryFps] = useState<number | null>(null);
   const [currentFps, setCurrentFps] = useState(0);
   // Stub 反馈：生命周期状态、错误码与两项注入功能的就绪位掩码（概览页运行状态卡用）
   const [stubStatus, setStubStatus] = useState(0);
@@ -118,6 +119,7 @@ export function useAppState() {
     setRunningGame(state.runningGame ?? null);
     setAttachedGame(state.attachedGame ?? null);
     setAttachedPid(state.attachedPid);
+    setStarRailRegistryFps(state.starRailRegistryFps ?? null);
     setCurrentFps(state.currentFps);
     setStubStatus(state.stubStatus ?? 0);
     setStubLastError(state.stubLastError ?? 0);
@@ -477,7 +479,7 @@ export function useAppState() {
     native, booting, config, setConfig, gameConfig, activeGame, setGame, page, theme, setTheme, sidebarOpen, setSidebarOpen,
     modal, setModal, modalGame, sessionGame, saveState, toasts, dismissToast, logs, setLogs, launchState, statusText,
     attachedPid, runningGame, attachedGame, activeRunning, activeAttached,
-    currentFps, isElevated, needsAdmin, elevating, autostart, version, effectiveEnabled, readiness,
+    currentFps, starRailRegistryFps, isElevated, needsAdmin, elevating, autostart, version, effectiveEnabled, readiness,
     stubStatus, stubLastError, antiBlurState, hideUidState,
     importRef, sidebarRef, addLog, notify, navigate, applyNativeState, updateConfig, updateGameConfig, openPathDialog, beginLaunch,
     restartElevated, startUninstall, handleLaunch, exportConfig, importConfig, exportLogs,
