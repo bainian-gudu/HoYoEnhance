@@ -352,6 +352,13 @@ internal sealed partial class UnlockService
                         session.NextInjectAttemptUtc = DateTime.UtcNow.AddSeconds(Math.Min(90, 15 * session.InjectFailStreak));
                         break;
                     }
+                    if (InjectionSessionPolicy.ShouldExitKeepalive(NeedsInjection(game), st.Status))
+                    {
+                        // 功能全关或 Stub 正在退出时，不能继续留在这个内层保活循环。
+                        // 否则重新启用只会覆盖开关字段，Host 永远走不到外层
+                        // ResetForNewInject(None)，Stub 会一直停在 Exiting 等待重入。
+                        break;
+                    }
                     SetStatus($"{descriptor.ShortName}：运行中 PID {process.Id} | Stub={st.Status} | 目标 {profile.TargetFps} | 反馈 {st.CurrentFps}");
                     await Task.Delay(activePoll, token);
                 }

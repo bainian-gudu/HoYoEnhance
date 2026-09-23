@@ -2,6 +2,7 @@
 import { Activity, ChevronRight } from 'lucide-react';
 import type { AppState } from '../hooks/useAppState';
 import { GAME_META } from '../lib/config';
+import { runtimeFpsText } from '../lib/runtimeStatus';
 
 type Tone = 'on' | 'wait' | 'off';
 
@@ -46,11 +47,13 @@ export function RuntimeStatus({ app }: { app: AppState }) {
     {
       label: '当前帧率',
       title: '当前帧率 → 目标帧率',
-      value: !running
-        ? '等待游戏启动'
-        : !attached
-          ? (registryFps ? `由注册表解锁 ${registryFps} FPS` : '未注入')
-          : currentFps > 0 ? `${currentFps} → ${gameConfig.targetFps} FPS` : `目标 ${gameConfig.targetFps} FPS`,
+      value: runtimeFpsText({
+        running,
+        attached,
+        registryFps,
+        currentFps,
+        targetFps: gameConfig.targetFps,
+      }),
     },
     { label: '游戏进程', title: undefined, value: !running ? '未检测到游戏' : attached ? `已附加 · PID ${attachedPid}` : '运行中（未注入）' },
     {
