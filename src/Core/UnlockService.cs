@@ -31,8 +31,17 @@ internal sealed partial class UnlockService : IDisposable
         public int RegistryCheckedPid;
         /// <summary>星穹铁道：最近一次注册表核对的结果文案（同上，跨线程读）。</summary>
         public volatile string RegistryStatus = "尚未检查注册表";
-        /// <summary>星穹铁道：最近一次核对读到的注册表 FPS；null 表示未确认。</summary>
-        public int? RegistryCurrentFps;
+        private int _registryCurrentFps = -1;
+        /// <summary>星穹铁道：最近读到的注册表 FPS；null 表示未确认。</summary>
+        public int? RegistryCurrentFps
+        {
+            get
+            {
+                var fps = Volatile.Read(ref _registryCurrentFps);
+                return fps < 0 ? null : fps;
+            }
+            set => Volatile.Write(ref _registryCurrentFps, value ?? -1);
+        }
         /// <summary>该游戏注入模块的完整路径。</summary>
         public string StubPath = "";
         /// <summary>最近一次轮询到的进程 PID；0 表示当前未运行。</summary>

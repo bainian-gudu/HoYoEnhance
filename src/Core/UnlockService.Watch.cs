@@ -66,7 +66,6 @@ internal sealed partial class UnlockService
                 using var process = FindRunningGame(out var runningGame);
                 if (process is null || runningGame is null)
                 {
-                    ClearRunning();
                     // 没有游戏进程：清掉待核对标记，避免退出后才补写注册表。
                     _sessions[GameId.StarRail].RegistryCheckPending = false;
                     _sessions[GameId.StarRail].RegistryCheckedPid = 0;
@@ -90,7 +89,6 @@ internal sealed partial class UnlockService
 
                 var game = runningGame.Value;
                 // 运行状态按游戏归属：界面只让这一款显示「运行中」，另一款保持等待启动。
-                SetRunning(game, process.Id);
                 var descriptor = GameCatalog.Get(game);
                 var profile = _config.Profile(game);
                 var session = _sessions[game];
@@ -104,7 +102,6 @@ internal sealed partial class UnlockService
                         session.RegistryCheckPending = false;
                         session.RegistryCheckedPid = 0;
                         session.InjectAttemptedPid = 0;
-                        ClearRunning();
                         SetAttached(null, 0);
                         await Task.Delay(activePoll, token);
                         continue;
@@ -115,7 +112,6 @@ internal sealed partial class UnlockService
                     session.RegistryCheckPending = false;
                     session.RegistryCheckedPid = 0;
                     session.InjectAttemptedPid = 0;
-                    ClearRunning();
                     SetAttached(null, 0);
                     await Task.Delay(activePoll, token);
                     continue;
@@ -272,7 +268,6 @@ internal sealed partial class UnlockService
                     {
                         session.RegistryCheckPending = false;
                         session.RegistryCheckedPid = 0;
-                        ClearRunning();
                         continue;
                     }
                 }
@@ -280,7 +275,6 @@ internal sealed partial class UnlockService
                 {
                     session.RegistryCheckPending = false;
                     session.RegistryCheckedPid = 0;
-                    ClearRunning();
                     continue;
                 }
 
@@ -382,7 +376,6 @@ internal sealed partial class UnlockService
                 session.RegistryCheckedPid = 0;
                 if (processExited)
                 {
-                    ClearRunning();
                     if (descriptor.FpsViaRegistry)
                         session.RegistryStatus = "游戏未运行 — 启动后会自动核对注册表";
                 }
@@ -523,23 +516,6 @@ internal sealed partial class UnlockService
     }
 
     /// <summary>
-    /// 记录当前运行的游戏进程。运行会话号由 <see cref="RunningSessionTracker"/>
-    /// 维护：同一进程的检测抖动不重复触发跟随，长时间后的 PID 复用仍算新会话。
-    /// </summary>
-    private void SetRunning(GameId game, int pid)
-    {
-        var flickerWindowMs = GamePollingPolicy.RunningFlickerWindowMs(_config.PollIntervalMs);
-        _runningSessions.Observe(
-            game, pid, DateTime.UtcNow.Ticks, TimeSpan.FromMilliseconds(flickerWindowMs).Ticks);
-    }
-
-    /// <summary>清除运行状态；保留运行会话号与最后见到的 PID，供托盘判定抖动。</summary>
-    private void ClearRunning()
-    {
-        _runningSessions.Clear(DateTime.UtcNow.Ticks);
-    }
-
-    /// <summary>
     /// 独立轮询每款游戏的进程状态，供游戏库和各游戏状态卡实时显示。
     /// 这里不复用共享 IPC 的附着状态，因为星铁无需注入，原神也可能尚未附着。
     /// </summary>
@@ -549,8 +525,22 @@ internal sealed partial class UnlockService
         var starRailPid = ReadRunningPid(GameCatalog.StarRail);
         var changed = WriteRunningPid(GameId.Genshin, genshinPid);
         changed |= WriteRunningPid(GameId.StarRail, starRailPid);
+        changed |= RefreshStarRailRegistryState();
 
         var runningGame = SelectRunningGame(genshinPid, starRailPid);
+        var runningPid = runningGame switch
+        {
+            GameId.Genshin => genshinPid,
+            GameId.StarRail => starRailPid,
+            _ => 0,
+        };
+        var flickerWindowMs = GamePollingPolicy.RunningFlickerWindowMs(_config.PollIntervalMs);
+        _runningSessions.Update(
+            runningGame,
+            runningPid,
+            DateTime.UtcNow.Ticks,
+            TimeSpan.FromMilliseconds(flickerWindowMs).Ticks);
+
         var runningValue = runningGame is GameId game ? EncodeGame(game) : 0;
         if (Volatile.Read(ref _runningGameValue) != runningValue)
         {
@@ -559,6 +549,19 @@ internal sealed partial class UnlockService
         }
 
         return changed;
+    }
+
+    private bool RefreshStarRailRegistryState()
+    {
+        var result = StarRailFpsRegistry.Read();
+        var session = _sessions[GameId.StarRail];
+        var changed = session.RegistryCurrentFps != result.CurrentFps
+                      || !string.Equals(session.RegistryStatus, result.Detail, StringComparison.Ordinal);
+        if (!changed) return false;
+
+        session.RegistryCurrentFps = result.CurrentFps;
+        session.RegistryStatus = result.Detail;
+        return true;
     }
 
     private static int ReadRunningPid(GameDescriptor descriptor)

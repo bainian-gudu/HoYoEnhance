@@ -21,6 +21,16 @@ internal sealed class RunningSessionTracker
     /// <summary>当前运行会话号；新进程出现时 +1。</summary>
     public int Session => Volatile.Read(ref _session);
 
+    /// <summary>按独立运行状态轮询结果推进会话，不依赖功能监视或注入开关。</summary>
+    public int Update(GameId? game, int pid, long nowTicks, long flickerWindowTicks)
+    {
+        if (game is GameId runningGame && pid > 0)
+            return Observe(runningGame, pid, nowTicks, flickerWindowTicks);
+
+        Clear(nowTicks);
+        return Session;
+    }
+
     /// <summary>记录一次检测到的游戏进程；返回当前会话号。</summary>
     public int Observe(GameId game, int pid, long nowTicks, long flickerWindowTicks)
     {
