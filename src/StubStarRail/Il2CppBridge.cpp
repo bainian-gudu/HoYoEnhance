@@ -22,6 +22,7 @@
 #include <Psapi.h>
 
 #include <cstring>
+#include <new>
 
 #include "Scanner.h"
 
@@ -91,6 +92,43 @@ namespace
     /// 孪生函数的搜索窗口：4.5.0 实测距离 0x60，留一倍余量。
     constexpr uintptr_t kGraphicTwinWindow = 0x80;
 
+    // TMPro.TMP_Text.SetVerticesDirty
+    //   4.5.0  RVA 0x134E9970
+    //   2026-09-28 RVA 0x1F2F77A0
+    // 两个版本都唯一命中。TMP_Text 覆写了 Graphic.SetVerticesDirty，只挂基类
+    // 会漏掉全部 TMP 文本；这一条覆盖 TMP_Text 及其未再覆写的子类。
+    constexpr const char* kTmpTextSetVerticesDirtyPattern =
+        "56 57 53 48 83 EC 20 48 89 CF FF 15 ?? ?? ?? ?? 84 C0 0F 84 ?? ?? ?? ?? "
+        "48 8B B7 ?? ?? ?? ?? 48 85 F6 0F 84 ?? ?? ?? ?? 48 83 7E 10 00";
+
+    // TMPro.TextMeshProUGUI 的 SetVerticesDirty / SetMaterialDirty。
+    //   4.5.0  RVA 0x134EACD0 / 0x1352A360
+    //   2026-09-28 RVA 0x1F2F8A80 / 0x1F337E50
+    // 两个版本都恰好命中 2 处，且两条候选的固定字节完全相同（IL2CPP 把这两个
+    // 同构方法编译成了同样的指令序列），静态无法区分。TextMeshProUGUI 又覆写了
+    // TMP_Text 的实现，所以两个候选都交给 HideUid 挂上：真身是文本重建通知点，
+    // 另一个只是多一次判定，没有副作用。
+    constexpr const char* kTmpUguiDirtyPattern =
+        "56 57 48 83 EC 28 48 85 C9 74 ?? 48 89 CE 48 83 79 10 00 74 ?? "
+        "48 89 F1 FF 15 ?? ?? ?? ?? 84 C0 74 ?? 48 8B 05 ?? ?? ?? ?? "
+        "48 8B B8 ?? ?? ?? ??";
+
+    // GameObject.Find(string)（路径查找兜底，4.5.0 旧方式）
+    //   4.5.0  第 4 个命中 = 0x1DEDE300
+    //   2026-09-28 第 4 个命中 = 0x1F3C1130
+    // 两版都命中 8~9 处，且「第几个」不稳定（GetComponent 两版序号就不同），
+    // 因此不按序号挑，交给主线程运行时探测。
+    constexpr const char* kGameObjectFindPattern =
+        "48 FF ?? ?? ?? ?? ?? 66 0F 1F 84 00 00 00 00 00 48 83 EC 28 C7 44 24 20";
+
+    // GameObject.GetComponent(string)（路径查找兜底，4.5.0 旧方式）
+    //   4.5.0  第 1 个命中 = 0x1DEDDE30
+    //   2026-09-28 第 3 个命中 = 0x1F3C0C60
+    // 两版都命中 8 处。同样交给运行时探测。
+    constexpr const char* kGetComponentStringPattern =
+        "48 8B 05 ?? ?? ?? ?? 48 FF E0 66 0F 1F 44 00 00 "
+        "48 8B 05 ?? ?? ?? ?? 45 31 C0 48 FF E0 0F 1F 00";
+
     // ---- IL2CPP 对象布局（跨版本长期稳定）--------------------------------
     constexpr size_t kIl2CppClassOffset = 0x00;       // Il2CppObject::klass
     constexpr size_t kIl2CppClassNameOffset = 0x10;   // Il2CppClass::name
@@ -98,6 +136,119 @@ namespace
     constexpr size_t kStringCharsOffset = 0x14;       // System.String::m_Chars
 
     Il2CppBridge::Functions g_functions{};
+
+    // ---- 路径查找运行时状态（只在游戏主线程访问）--------------------------
+    void* g_findResolved = nullptr;          // 探测确定的 GameObject.Find
+    void* g_getComponentResolved = nullptr;  // 探测确定的 GameObject.GetComponent(string)
+    bool g_pathLookupProbed = false;         // 是否已成功探测（成功后才置位）
+
+    // 自建 IL2CPP 字符串：星铁没有可用的 il2cpp_string_new 导出，参考实现同样
+    // 手工拼 length + chars。只在 Find / GetComponent 调用期间有效，调用后立即
+    // 释放；不交给会长期持有引用的游戏代码。
+    struct Il2CppString
+    {
+        void* klass;
+        void* monitor;
+        int32_t length;
+        wchar_t chars[1];
+    };
+
+    class ScopedIl2CppString
+    {
+    public:
+        explicit ScopedIl2CppString(const char* utf8)
+        {
+            if (!utf8 || *utf8 == '\0')
+            {
+                return;
+            }
+
+            const int wideLength = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, nullptr, 0);
+            if (wideLength <= 1)
+            {
+                return;
+            }
+
+            // 多留一个 wchar_t 给结尾 NUL：IL2CPP 的 length 不含 NUL，
+            // 但底层字符串缓冲区按惯例以 NUL 结尾，避免转换时越界写入。
+            const size_t bytes = offsetof(Il2CppString, chars) +
+                                 static_cast<size_t>(wideLength) * sizeof(wchar_t);
+            auto* value = static_cast<Il2CppString*>(::operator new[](bytes, std::nothrow));
+            if (!value)
+            {
+                return;
+            }
+
+            std::memset(value, 0, bytes);
+            value->klass = nullptr;
+            value->monitor = nullptr;
+            value->length = wideLength - 1;
+            MultiByteToWideChar(CP_UTF8, 0, utf8, -1, value->chars, wideLength);
+            _value = value;
+        }
+
+        ~ScopedIl2CppString()
+        {
+            ::operator delete[](_value);
+        }
+
+        ScopedIl2CppString(const ScopedIl2CppString&) = delete;
+        ScopedIl2CppString& operator=(const ScopedIl2CppString&) = delete;
+
+        bool Valid() const { return _value != nullptr; }
+        void* Get() const { return _value; }
+
+    private:
+        Il2CppString* _value = nullptr;
+    };
+
+    using FindFn = void* (*)(void*);
+    using GetComponentFn = void* (*)(void*, void*);
+
+    /// <summary>
+    /// 带 SEH 的 GameObject.Find 调用。函数内不能出现需要析构的 C++ 对象
+    /// （MSVC C2712），字符串构造放在调用方。
+    /// </summary>
+    void* CallFindRaw(void* find, void* str)
+    {
+        if (!find || !str)
+        {
+            return nullptr;
+        }
+#if defined(_MSC_VER)
+        __try
+        {
+            return reinterpret_cast<FindFn>(find)(str);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return nullptr;
+        }
+#else
+        return reinterpret_cast<FindFn>(find)(str);
+#endif
+    }
+
+    /// <summary>带 SEH 的 GameObject.GetComponent(string) 调用。</summary>
+    void* CallGetComponentRaw(void* getComponent, void* gameObject, void* typeName)
+    {
+        if (!getComponent || !gameObject || !typeName)
+        {
+            return nullptr;
+        }
+#if defined(_MSC_VER)
+        __try
+        {
+            return reinterpret_cast<GetComponentFn>(getComponent)(gameObject, typeName);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return nullptr;
+        }
+#else
+        return reinterpret_cast<GetComponentFn>(getComponent)(gameObject, typeName);
+#endif
+    }
 
     /// <summary>地址是否落在模块映像内。</summary>
     bool IsInModule(HMODULE module, const void* address, size_t size)
@@ -239,6 +390,33 @@ namespace
         }
         return match;
     }
+
+    /// <summary>
+    /// 收集多命中目标的全部候选，过滤掉模块外 / 不可执行的项。
+    /// 候选的真身由主线程运行时探测决定（见 FindGraphicByPath）。
+    /// </summary>
+    void CollectCandidates(HMODULE module, const char* pattern, void** out, size_t& count,
+                           size_t capacity)
+    {
+        count = 0;
+        if (!module || !pattern || !out || capacity == 0)
+        {
+            return;
+        }
+
+        const auto hits = Scanner::ScanModuleAll(module, pattern);
+        for (void* hit : hits)
+        {
+            if (count >= capacity)
+            {
+                break;
+            }
+            if (IsInModule(module, hit, 1) && IsExecutable(hit, 1))
+            {
+                out[count++] = hit;
+            }
+        }
+    }
 }
 
 namespace Il2CppBridge
@@ -285,6 +463,33 @@ namespace Il2CppBridge
         {
             return ResolveStatus::GraphicEntryMissing;
         }
+
+        // TMP 文本重建通知：可选增强。TMP_Text 覆写了 Graphic.SetVerticesDirty，
+        // 只挂基类会漏掉 TMP 文本；定位失败不阻塞（UID 仍可走路径查找兜底）。
+        out.tmpTextSetVerticesDirty = ResolveUnique(gameAssembly, kTmpTextSetVerticesDirtyPattern);
+
+        // TextMeshProUGUI 的 SetVerticesDirty / SetMaterialDirty 两个同构候选，
+        // 静态无法区分，两个都留给 HideUid 挂上。
+        {
+            const auto candidates = Scanner::ScanModuleAll(gameAssembly, kTmpUguiDirtyPattern);
+            for (void* candidate : candidates)
+            {
+                if (out.tmpUguiDirtyCount >= 2)
+                {
+                    break;
+                }
+                if (IsInModule(gameAssembly, candidate, 1) && IsExecutable(candidate, 1))
+                {
+                    out.tmpUguiDirty[out.tmpUguiDirtyCount++] = candidate;
+                }
+            }
+        }
+
+        // 路径查找兜底（4.5.0 旧方式）：候选多命中，真身由主线程探测。
+        CollectCandidates(gameAssembly, kGameObjectFindPattern, out.findCandidates,
+                          out.findCandidateCount, kMaxPathCandidates);
+        CollectCandidates(gameAssembly, kGetComponentStringPattern, out.getComponentCandidates,
+                          out.getComponentCandidateCount, kMaxPathCandidates);
 
         g_functions = out;
         return ResolveStatus::Ok;
@@ -417,6 +622,95 @@ namespace Il2CppBridge
         out[copyLength] = L'\0';
         length = copyLength;
         return true;
+    }
+
+    void* FindGraphicByPath(const char* path)
+    {
+        const Functions& functions = g_functions;
+        if (!path || functions.findCandidateCount == 0 ||
+            functions.getComponentCandidateCount == 0)
+        {
+            return nullptr;
+        }
+
+        ScopedIl2CppString pathString(path);
+        if (!pathString.Valid())
+        {
+            return nullptr;
+        }
+
+        // 探测成功后只用缓存的真身，避免每帧把全部候选都调一遍。
+        if (g_pathLookupProbed)
+        {
+            void* gameObject = CallFindRaw(g_findResolved, pathString.Get());
+            if (!gameObject)
+            {
+                return nullptr;
+            }
+            ScopedIl2CppString graphicName("UnityEngine.UI.Graphic");
+            if (!graphicName.Valid())
+            {
+                return nullptr;
+            }
+            return CallGetComponentRaw(g_getComponentResolved, gameObject, graphicName.Get());
+        }
+
+        // 未探测：逐个候选试。GameObject.Find 返回的必然是 GameObject，
+        // GetComponent("UnityEngine.UI.Graphic") 返回的必然是 Graphic，用返回值
+        // 类名做交叉校验，避免把无关的 icall 转发桩当成真身。
+        void* findHit = nullptr;
+        void* gameObject = nullptr;
+        for (size_t i = 0; i < functions.findCandidateCount; ++i)
+        {
+            void* candidate = functions.findCandidates[i];
+            void* found = CallFindRaw(candidate, pathString.Get());
+            if (!found)
+            {
+                continue;
+            }
+            const char* className = ObjectClassName(found);
+            if (className && std::strstr(className, "GameObject"))
+            {
+                findHit = candidate;
+                gameObject = found;
+                break;
+            }
+        }
+        if (!findHit)
+        {
+            // 路径当前不存在（UI 尚未加载 / 该界面未打开），下次再试。
+            return nullptr;
+        }
+
+        ScopedIl2CppString graphicName("UnityEngine.UI.Graphic");
+        if (!graphicName.Valid())
+        {
+            return nullptr;
+        }
+
+        for (size_t i = 0; i < functions.getComponentCandidateCount; ++i)
+        {
+            void* candidate = functions.getComponentCandidates[i];
+            void* graphic = CallGetComponentRaw(candidate, gameObject, graphicName.Get());
+            if (!graphic)
+            {
+                continue;
+            }
+            const char* className = ObjectClassName(graphic);
+            if (className && std::strstr(className, "Graphic"))
+            {
+                g_findResolved = findHit;
+                g_getComponentResolved = candidate;
+                g_pathLookupProbed = true;
+                return graphic;
+            }
+        }
+        return nullptr;
+    }
+
+    bool IsPathLookupReady()
+    {
+        return g_pathLookupProbed;
     }
 
     const Functions& Resolved()

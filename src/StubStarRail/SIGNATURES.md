@@ -40,9 +40,17 @@ IL2CPP 每次重编译都会整体平移函数 RVA，写死 RVA 必然失效。
 | `Dither.SetElevation` | `0x19F1BD70` | `0x0C7EBBB0` | 1 / 1 | 高度 Dither 公开入口，兜底 |
 | `DOF.IsActiveImpl` | `0x1858CCF0` | `0x1CC15630` | 1 / 1 | 景深后处理总开关，返回 false 即跳过 |
 | `Graphic.SetVerticesDirty` | `0x1B78C0C0` | `0x1F4C79B0` | 2 / 2 | UI 重建通知；多命中，需相邻孪生校验 |
+| `TMP_Text.SetVerticesDirty` | `0x134E9970` | `0x1F2F77A0` | 1 / 1 | TMP 文本重建通知；TMP_Text 覆写了 Graphic 的实现 |
+| `TextMeshProUGUI.Dirty` | `0x134EACD0` / `0x1352A360` | `0x1F2F8A80` / `0x1F337E50` | 2 / 2 | SetVerticesDirty 与 SetMaterialDirty 同构，两个都挂 |
+| `GameObject.Find` | `0x1DEDE300` | `0x1F3C1130` | 9 / 8 | 路径查找兜底；多命中，真身由运行时探测确定 |
+| `GameObject.GetComponent` | `0x1DEDDE30` | `0x1F3C0C60` | 8 / 8 | 路径查找兜底；多命中，真身由运行时探测确定 |
 
 两版 RVA 均由 `check_signatures.py` 扫描得到，与旧版 `dump.cs` 里 dump 出的 RVA
 逐条对齐；工具对两版分别运行都报告「全部目标唯一命中」。
+
+表中后四项里，`TextMeshProUGUI.Dirty`、`GameObject.Find`、`GameObject.GetComponent`
+是**预期的多命中目标**：工具的判定列为「多命中(预期)」，只校验命中数落在预期区间，
+不要求唯一。它们的真身选择见 2.6 / 2.7 / 2.8。
 
 ### 2.1 `RPGApplication.OnUpdate`
 
@@ -125,6 +133,58 @@ C6 46 58 01 48 89 F1 E8 ?? ?? ?? ?? 48 8B 46 68 48 85 C0 74 ??
 校验规则：候选后面 `0x80` 字节（4.5.0 实测距离 `0x60`，留一倍余量）内必须出现
 孪生特征；恰好一个候选满足才接受，多于一个仍判失败。
 
+### 2.6 `TMP_Text.SetVerticesDirty`
+
+```
+56 57 53 48 83 EC 20 48 89 CF FF 15 ?? ?? ?? ?? 84 C0 0F 84 ?? ?? ?? ??
+48 8B B7 ?? ?? ?? ?? 48 85 F6 0F 84 ?? ?? ?? ?? 48 83 7E 10 00
+```
+
+`TMPro.TMP_Text` 覆写了 `Graphic.SetVerticesDirty`，只挂基类会漏掉全部 TMP 文本。
+两版都唯一命中。`48 8B B7 ?? ?? ?? ??` / `48 83 7E 10 00` 里的字段偏移随版本变，
+留通配；函数头 `56 57 53 48 83 EC 20 48 89 CF` 与调用虚函数后的 `84 C0` 判空
+是稳定结构。
+
+### 2.7 `TextMeshProUGUI.Dirty`（多命中，两个都挂）
+
+```
+56 57 48 83 EC 28 48 85 C9 74 ?? 48 89 CE 48 83 79 10 00 74 ??
+48 89 F1 FF 15 ?? ?? ?? ?? 84 C0 74 ?? 48 8B 05 ?? ?? ?? ??
+48 8B B8 ?? ?? ?? ??
+```
+
+`TMPro.TextMeshProUGUI` 又覆写了 `TMP_Text` 的实现，因此必须单独挂它自己的入口。
+两版都恰好命中 2 处：`SetVerticesDirty` 与同构的 `SetMaterialDirty` —— IL2CPP 把
+这两个「判空 → 置脏标志 → 通知 Canvas」的方法编译成了同样的指令序列，固定字节
+完全相同，静态无法区分。
+
+处理方式：**两个候选都挂**。命中的那个是真正的文本重建通知点；另一个只是多一次
+无害的判定，不会改变原函数行为。
+
+### 2.8 `GameObject.Find` / `GameObject.GetComponent(string)`（路径查找兜底）
+
+```
+（Find）       48 FF ?? ?? ?? ?? ?? 66 0F 1F 84 00 00 00 00 00 48 83 EC 28 C7 44 24 20
+（GetComponent）48 8B 05 ?? ?? ?? ?? 48 FF E0 66 0F 1F 44 00 00
+               48 8B 05 ?? ?? ?? ?? 45 31 C0 48 FF E0 0F 1F 00
+```
+
+这是 4.5.0 旧实现的路径查找方式：`GameObject.Find(path)` →
+`GetComponent("UnityEngine.UI.Graphic")`，命中后直接写 `Graphic.m_Color.a`。它对
+组件类型免疫 —— 水印无论用 `UI.Text`、TMP 还是 `Image` / `Sprite`，只要挂在节点上
+就能抓到，是文本识别不生效时唯一可靠的兜底。
+
+两条特征码都是 IL2CPP 的 icall 转发桩（`jmp qword [rip+...]` / `mov rax,[rip]; jmp rax`），
+模块里天然多命中：Find 旧版 9 / 新版 8 处，GetComponent 两版各 8 处。**「第几个命中」
+不稳定**（旧版 GetComponent 真身是第 1 个，新版是第 3 个），因此运行时不按序号挑，
+改为在主线程逐个候选试调用 + 返回值类名交叉校验：
+
+- `Find(path)` 的返回值必须是类名含 `GameObject` 的对象；
+- `GetComponent(go, "UnityEngine.UI.Graphic")` 的返回值必须是类名含 `Graphic` 的对象。
+
+两者同时成立才缓存为真身，之后只用缓存地址；全部游戏调用都套 SEH，路径当前不存在
+时返回空、下次继续重试。
+
 ## 三、新增 / 更新特征码的落地步骤
 
 1. 采集新版 `GameAssembly.dll`（仓库自带 `tools/hsr-capture.ps1`，产物落在 WSL 内）。
@@ -135,3 +195,9 @@ C6 46 58 01 48 89 F1 E8 ?? ?? ?? ?? 48 8B 46 68 48 85 C0 74 ??
    再对新旧两版各跑一遍，全部唯一命中才算通过。
 5. 字段偏移（`Graphic.m_Color` `+0x20`、`Text.m_Text` `+0xF8`）在 `dump.cs` 里复核；
    这两项是 Unity 引擎侧字段，跨版本变化概率低，但每次大版本仍应确认。
+
+> 第 4 步里的「全部唯一命中」对**预期多命中**目标（2.7 / 2.8）放宽为「命中数落在
+> 预期区间」。新增或调整这类目标时，记得在 `check_signatures.py` 的 `Signature`
+> 上标 `expect_multiple=True` 并给出 `min_hits` / `max_hits`，否则会被误判为失败。
+> 第 5 步的文本字段偏移现在有两个：`UI.Text.m_Text` `+0xF8` 与
+> `TMP_Text.m_text` `+0xF0`，两者在 `HideUid.cpp` 里都试。

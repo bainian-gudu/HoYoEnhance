@@ -1,20 +1,30 @@
 // =============================================================================
 // 星穹铁道隐藏 UID 水印实现。
 //
-// 主线程入口：Hook RPG.Client.RPGApplication.OnUpdate（动态特征码唯一命中），
-// 只用来做关闭时的还原与状态上报。
+// 两条路一起上，互为兜底：
 //
-// 实际隐藏点：Hook UnityEngine.UI.Graphic.SetVerticesDirty（动态特征码 +
-// 相邻孪生函数校验）。它是 UI 颜色 / 文本变化的必经点，在这里能直接拿到
-// Graphic 实例，不必再用 GameObject.Find 走层级路径 —— 路径随版本改动是旧实现
-// 失效的直接原因。
+//   A) 路径查找（4.5.0 旧方式，主路径）
+//      在主线程 tick 里按 UI 层级路径 GameObject.Find → GetComponent(
+//      "UnityEngine.UI.Graphic") 直接取到 Graphic 并写 m_Color.a = 0。
+//      这条路对组件类型免疫 —— 水印无论用 Text、TMP 还是 Image / Sprite，
+//      只要挂在节点上就能抓到，也是「文本识别不生效」时唯一可靠的兜底。
+//      Find / GetComponent 的地址由 Il2CppBridge 用运行时探测确定（特征码
+//      天然多命中，不能按序号挑）。
 //
-// 组件判定：类名含 "Text" 的 Graphic 才处理。星铁 UI 的文本组件有多个类
-// （Text / LocalizedText / SRText / HoYoText ...），水印不一定是基类 "Text"；
-// 只比较 "Text" 会把用子类的对象整个跳过，这是「反虚化生效、UID 不生效」
-// 最可能的原因。
+//   B) 文本识别（辅助路径）
+//      1) Hook UnityEngine.UI.Graphic.SetVerticesDirty（唯一命中 + 相邻孪生校验），
+//         它是 UI.Text 系文本变化的必经点；
+//      2) 额外 Hook TMPro.TMP_Text.SetVerticesDirty（唯一命中）与
+//         TMPro.TextMeshProUGUI 的两个同构 Dirty 入口 —— TMP_Text 覆写了
+//         Graphic.SetVerticesDirty，只挂基类会漏掉全部 TMP 文本；
+//      3) 类名含 "Text" 的组件才处理（Text / LocalizedText / TMP_Text /
+//         TextMeshProUGUI ...）；
+//      4) 同时尝试 UI.Text.m_Text（+0xF8）与 TMP_Text.m_text（+0xF0）两个偏移，
+//         取看起来真的是 il2cpp string 的那个；
+//      5) Hook RPG.Client.RPGApplication.OnUpdate 作为主线程 tick：跑路径查找、
+//         处理关闭时的还原、上报状态位。
 //
-// 判定规则（不依赖任何 UI 节点名）：
+// 文本判定规则（不依赖任何 UI 节点名）：
 //   a) 文本含 "UID"（忽略大小写）且带 6~12 位连续数字 → 判定为 UID 水印，
 //      同时把这串数字记为「已知 UID」；
 //   b) 文本本身就是 6~12 位纯数字，且与「已知 UID」完全一致 → 判定为 UID
@@ -40,8 +50,14 @@ namespace
     constexpr size_t kGraphicColorOffset = 0x20;
     constexpr size_t kGraphicColorAlphaOffset = kGraphicColorOffset + 3 * sizeof(float);
 
-    // UnityEngine.UI.Text.m_Text // Offset: 0xF8（dump.cs 实测）
-    constexpr size_t kTextTextOffset = 0xF8;
+    // 文本字段偏移（dump.cs 实测）：
+    //   UnityEngine.UI.Text.m_Text  +0xF8
+    //   TMPro.TMP_Text.m_text       +0xF0
+    // 两个偏移互相落在对方的其它字段上，所以不能按类名硬选，改为两个都读、
+    // 用「length 合法 + 内容是 UID」筛出真正有效的那个。
+    constexpr size_t kUiTextTextOffset = 0xF8;
+    constexpr size_t kTmpTextTextOffset = 0xF0;
+    constexpr size_t kTextTextOffsets[] = {kUiTextTextOffset, kTmpTextTextOffset};
 
     // System.String::m_Length // Offset: 0x10
     constexpr size_t kStringLengthOffset = 0x10;
@@ -54,6 +70,17 @@ namespace
     constexpr size_t kMaxHidden = 32;
     constexpr DWORD kRestoreWaitMs = 250;
 
+    // 路径查找的候选节点。前两条来自 4.5.0 参考实现；路径随版本会变，任何一条
+    // 失效都只是少一个兜底点，不影响文本识别。
+    constexpr const char* kUidPaths[] = {
+        "/UIRoot/AboveDialog/BetaHintDialog(Clone)/Contents/VersionText",
+        "/UIRoot/Page/MobilePhoneMainPage(Clone)/Content/Content/LeftPlane/Tittle/UID/NumText",
+    };
+
+    // 路径查找不需要每帧跑：水印只在切界面时重建，0.25s 一次足够，也能把
+    // GameObject.Find 的场景遍历开销摊薄。
+    constexpr int32_t kPathLookupIntervalTicks = 15;
+
     struct HiddenEntry
     {
         void* graphic;
@@ -62,9 +89,16 @@ namespace
 
     void* g_boundIpc = nullptr;
     void* g_originalSetVerticesDirty = nullptr;
+    void* g_originalTmpTextSetVerticesDirty = nullptr;
+    void* g_originalTmpUguiDirtyA = nullptr;
+    void* g_originalTmpUguiDirtyB = nullptr;
     void* g_originalOnUpdate = nullptr;
     bool g_setVerticesDirtyReady = false;
+    bool g_tmpTextSetVerticesDirtyReady = false;
+    bool g_tmpUguiDirtyAReady = false;
+    bool g_tmpUguiDirtyBReady = false;
     bool g_onUpdateReady = false;
+    int32_t g_pathLookupCountdown = 0;
 
     // 以下状态只在游戏主线程访问（SetVerticesDirty / OnUpdate 都在主线程）。
     HiddenEntry g_hidden[kMaxHidden]{};
@@ -224,27 +258,18 @@ namespace
         g_hidden[kMaxHidden - 1].originalAlpha = originalAlpha;
     }
 
-    /// <summary>SetVerticesDirty 内的文本判定与隐藏路径。</summary>
-    void HideIfUidText(void* self)
+    /// <summary>
+    /// 按给定字段偏移取出文本并判定 UID。
+    /// 偏移不对时会读到别的字段，用「指针非空 + length 合法」先把绝大多数假指针
+    /// 挡掉（例如 UI.Text 的 +0xF0 是 m_FontData，TMP 的 +0xF8 是 bool）。
+    /// </summary>
+    bool MatchUidTextAtOffset(void* self, size_t offset)
     {
-        if (!self)
-        {
-            return;
-        }
-
-        // 每次都按类名判断：星铁的文本对象有 Text / LocalizedText 等多个类，
-        // 缓存单一 klass 会把后续出现的其它文本类全部挡掉。
-        if (!IsTextComponentName(Il2CppBridge::ObjectClassName(self)))
-        {
-            return;
-        }
-
         void* text = nullptr;
-        if (!Il2CppBridge::ReadBytesRaw(
-                static_cast<uint8_t*>(self) + kTextTextOffset, &text, sizeof(text)) ||
+        if (!Il2CppBridge::ReadBytesRaw(static_cast<uint8_t*>(self) + offset, &text, sizeof(text)) ||
             !text)
         {
-            return;
+            return false;
         }
 
         // 先读长度：长文本一律不可能是 UID 水印，直接跳过。
@@ -253,30 +278,62 @@ namespace
                 static_cast<uint8_t*>(text) + kStringLengthOffset, &rawLength, sizeof(rawLength)) ||
             rawLength <= 0 || rawLength > kMaxUidTextLength)
         {
-            return;
+            return false;
         }
 
         wchar_t buffer[64]{};
         int32_t length = 0;
         if (!Il2CppBridge::ReadString(text, buffer, 64, length))
         {
-            return;
+            return false;
         }
-        if (!MatchUidText(buffer, length))
+        return MatchUidText(buffer, length);
+    }
+
+    /// <summary>把一个已确认的 Graphic 置为全透明，并记录原 alpha 以便还原。</summary>
+    void HideGraphic(void* graphic)
+    {
+        if (!graphic)
         {
             return;
         }
 
         float alpha = 1.0f;
         if (!Il2CppBridge::ReadFloat(
-                static_cast<uint8_t*>(self) + kGraphicColorAlphaOffset, alpha) ||
+                static_cast<uint8_t*>(graphic) + kGraphicColorAlphaOffset, alpha) ||
             alpha <= 0.0f)
         {
             return; // 已经是透明的，不重复记录
         }
 
-        RememberHidden(self, alpha);
-        Il2CppBridge::WriteFloat(static_cast<uint8_t*>(self) + kGraphicColorAlphaOffset, 0.0f);
+        RememberHidden(graphic, alpha);
+        Il2CppBridge::WriteFloat(static_cast<uint8_t*>(graphic) + kGraphicColorAlphaOffset, 0.0f);
+    }
+
+    /// <summary>SetVerticesDirty 内的文本判定与隐藏路径。</summary>
+    void HideIfUidText(void* self)
+    {
+        if (!self)
+        {
+            return;
+        }
+
+        // 每次都按类名判断：星铁的文本对象有 Text / LocalizedText / TMP_Text /
+        // TextMeshProUGUI 等多个类，缓存单一 klass 会把后续出现的其它文本类全部挡掉。
+        if (!IsTextComponentName(Il2CppBridge::ObjectClassName(self)))
+        {
+            return;
+        }
+
+        // UI.Text 与 TMP_Text 的文本字段偏移不同，两个都试一遍。
+        for (size_t offset : kTextTextOffsets)
+        {
+            if (MatchUidTextAtOffset(self, offset))
+            {
+                HideGraphic(self);
+                return;
+            }
+        }
     }
 
     void HideIfUidTextSafe(void* self)
@@ -301,7 +358,9 @@ namespace
         for (size_t i = 0; i < g_hiddenCount; ++i)
         {
             void* graphic = g_hidden[i].graphic;
-            if (!IsTextComponentName(Il2CppBridge::ObjectClassName(graphic)))
+            // 路径查找可能隐藏的是 Image / Sprite 等非文本 Graphic，因此这里只校验
+            // 对象仍然存活（类名可读），不要求类名含 "Text"。
+            if (!Il2CppBridge::ObjectClassName(graphic))
             {
                 continue;
             }
@@ -309,6 +368,28 @@ namespace
                                      g_hidden[i].originalAlpha);
         }
         g_hiddenCount = 0;
+    }
+
+    /// <summary>
+    /// 主线程 tick 里的路径查找兜底（4.5.0 旧方式）。
+    /// 只在开关打开且到达间隔帧时执行，避免每帧遍历整个场景。
+    /// </summary>
+    void PathLookupTick()
+    {
+        if (--g_pathLookupCountdown > 0)
+        {
+            return;
+        }
+        g_pathLookupCountdown = kPathLookupIntervalTicks;
+
+        for (const char* path : kUidPaths)
+        {
+            void* graphic = Il2CppBridge::FindGraphicByPath(path);
+            if (graphic)
+            {
+                HideGraphic(graphic);
+            }
+        }
     }
 
     void MainThreadTick()
@@ -325,10 +406,19 @@ namespace
             RestoreAll();
         }
 
+        if (ipc->HideUid != 0)
+        {
+            PathLookupTick();
+        }
+
         const bool hidden = g_hiddenCount > 0;
         g_hidAnyObject.store(hidden, std::memory_order_relaxed);
-        ipc->HideUidState = static_cast<int32_t>(IpcHideUidState::Ready) |
-                            (hidden ? static_cast<int32_t>(IpcHideUidState::Active) : 0);
+        ipc->HideUidState =
+            static_cast<int32_t>(IpcHideUidState::Ready) |
+            (hidden ? static_cast<int32_t>(IpcHideUidState::Active) : 0) |
+            (Il2CppBridge::IsPathLookupReady()
+                 ? static_cast<int32_t>(IpcHideUidState::PathReady)
+                 : 0);
     }
 
     /// <summary>
@@ -364,22 +454,47 @@ namespace
         MainThreadTickSafe();
     }
 
-    void HookSetVerticesDirty(void* self)
+    /// <summary>
+    /// 所有文本重建入口共用的处理：先判定 / 隐藏，再转调原函数。
+    /// UI.Text 与 TMP 的 SetVerticesDirty 签名都是 void(void* this)。
+    /// </summary>
+    void HandleTextDirty(void* self, void* original)
     {
         if (IsHideEnabled())
         {
             HideIfUidTextSafe(self);
         }
-        if (g_originalSetVerticesDirty)
+        if (original)
         {
-            reinterpret_cast<SetVerticesDirtyFn>(g_originalSetVerticesDirty)(self);
+            reinterpret_cast<SetVerticesDirtyFn>(original)(self);
         }
+    }
+
+    void HookSetVerticesDirty(void* self)
+    {
+        HandleTextDirty(self, g_originalSetVerticesDirty);
+    }
+
+    void HookTmpTextSetVerticesDirty(void* self)
+    {
+        HandleTextDirty(self, g_originalTmpTextSetVerticesDirty);
+    }
+
+    void HookTmpUguiDirtyA(void* self)
+    {
+        HandleTextDirty(self, g_originalTmpUguiDirtyA);
+    }
+
+    void HookTmpUguiDirtyB(void* self)
+    {
+        HandleTextDirty(self, g_originalTmpUguiDirtyB);
     }
 }
 
 namespace HideUid
 {
-    bool Initialize(IpcData* ipc, void* rpgApplicationOnUpdate, void* graphicSetVerticesDirty)
+    bool Initialize(IpcData* ipc, void* rpgApplicationOnUpdate, void* graphicSetVerticesDirty,
+                    void* tmpTextSetVerticesDirty, void* tmpUguiDirtyA, void* tmpUguiDirtyB)
     {
         if (!ipc || !rpgApplicationOnUpdate || !graphicSetVerticesDirty)
         {
@@ -390,6 +505,7 @@ namespace HideUid
         // 新一轮会话开始时清除上一轮的 tick 故障标志；否则 Host 重试后
         // 会立刻被旧的 faulted 状态再次判为 Error。
         g_faulted.store(false, std::memory_order_relaxed);
+        g_pathLookupCountdown = 0;
 
         if (!g_onUpdateReady)
         {
@@ -406,8 +522,34 @@ namespace HideUid
                               reinterpret_cast<LPVOID*>(&g_originalSetVerticesDirty)) == MH_OK;
         }
 
+        // TMP / TextMeshProUGUI 的 Dirty 入口是可选增强：TMP_Text 覆写了
+        // Graphic.SetVerticesDirty，挂上它们才能覆盖 TMP 系文本；定位失败只降级为
+        // 「文本识别只覆盖 UI.Text 系」，路径查找兜底仍然有效，不阻塞整个模块。
+        if (!g_tmpTextSetVerticesDirtyReady && tmpTextSetVerticesDirty)
+        {
+            g_tmpTextSetVerticesDirtyReady =
+                MH_CreateHook(tmpTextSetVerticesDirty,
+                              reinterpret_cast<void*>(&HookTmpTextSetVerticesDirty),
+                              reinterpret_cast<LPVOID*>(&g_originalTmpTextSetVerticesDirty)) == MH_OK;
+        }
+
+        if (!g_tmpUguiDirtyAReady && tmpUguiDirtyA)
+        {
+            g_tmpUguiDirtyAReady =
+                MH_CreateHook(tmpUguiDirtyA, reinterpret_cast<void*>(&HookTmpUguiDirtyA),
+                              reinterpret_cast<LPVOID*>(&g_originalTmpUguiDirtyA)) == MH_OK;
+        }
+
+        if (!g_tmpUguiDirtyBReady && tmpUguiDirtyB && tmpUguiDirtyB != tmpUguiDirtyA)
+        {
+            g_tmpUguiDirtyBReady =
+                MH_CreateHook(tmpUguiDirtyB, reinterpret_cast<void*>(&HookTmpUguiDirtyB),
+                              reinterpret_cast<LPVOID*>(&g_originalTmpUguiDirtyB)) == MH_OK;
+        }
+
         const bool ready = g_onUpdateReady && g_setVerticesDirtyReady;
-        ipc->HideUidState = ready ? static_cast<int32_t>(IpcHideUidState::Ready) : 0;
+        ipc->HideUidState =
+            ready ? static_cast<int32_t>(IpcHideUidState::Ready) : 0;
         return ready;
     }
 

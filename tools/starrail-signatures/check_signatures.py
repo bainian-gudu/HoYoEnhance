@@ -41,6 +41,12 @@ class Signature:
     twin_pattern: str | None = None
     twin_window: int = 0
     twin_baseline_rva: int = 0
+    # 多命中是预期行为：真身由运行时探测确定（路径查找），或两个同构入口都要挂
+    # （TextMeshProUGUI 的 SetVerticesDirty / SetMaterialDirty）。这类目标只要求
+    # 命中数落在 [min_hits, max_hits] 区间内，不按「唯一命中」判定。
+    expect_multiple: bool = False
+    min_hits: int = 1
+    max_hits: int = 0  # 0 表示不设上限
 
 
 SIGNATURES: tuple[Signature, ...] = (
@@ -93,6 +99,35 @@ SIGNATURES: tuple[Signature, ...] = (
         twin_window=0x80,
         twin_baseline_rva=0x1B78C120,
     ),
+    Signature(
+        "TMP_Text.SetVerticesDirty",
+        "56 57 53 48 83 EC 20 48 89 CF FF 15 ?? ?? ?? ?? 84 C0 0F 84 ?? ?? ?? ?? "
+        "48 8B B7 ?? ?? ?? ?? 48 85 F6 0F 84 ?? ?? ?? ?? 48 83 7E 10 00",
+        0x134E9970,
+    ),
+    Signature(
+        "TextMeshProUGUI.Dirty",
+        "56 57 48 83 EC 28 48 85 C9 74 ?? 48 89 CE 48 83 79 10 00 74 ?? "
+        "48 89 F1 FF 15 ?? ?? ?? ?? 84 C0 74 ?? 48 8B 05 ?? ?? ?? ?? "
+        "48 8B B8 ?? ?? ?? ??",
+        0x134EACD0,
+        expect_multiple=True,
+        min_hits=2,
+        max_hits=2,
+    ),
+    Signature(
+        "GameObject.Find",
+        "48 FF ?? ?? ?? ?? ?? 66 0F 1F 84 00 00 00 00 00 48 83 EC 28 C7 44 24 20",
+        0x1DEDE300,
+        expect_multiple=True,
+    ),
+    Signature(
+        "GameObject.GetComponent",
+        "48 8B 05 ?? ?? ?? ?? 48 FF E0 66 0F 1F 44 00 00 "
+        "48 8B 05 ?? ?? ?? ?? 45 31 C0 48 FF E0 0F 1F 00",
+        0x1DEDDE30,
+        expect_multiple=True,
+    ),
 )
 
 # C++ 源码（src/StubStarRail/Il2CppBridge.cpp）里的常量名 -> 本工具的签名名。
@@ -104,6 +139,10 @@ CPP_PATTERN_CONSTANTS: dict[str, str] = {
     "Dither.SetElevation": "kDitherSetElevationPattern",
     "DOF.IsActiveImpl": "kDofIsActivePattern",
     "Graphic.SetVerticesDirty": "kGraphicSetVerticesDirtyPattern",
+    "TMP_Text.SetVerticesDirty": "kTmpTextSetVerticesDirtyPattern",
+    "TextMeshProUGUI.Dirty": "kTmpUguiDirtyPattern",
+    "GameObject.Find": "kGameObjectFindPattern",
+    "GameObject.GetComponent": "kGetComponentStringPattern",
 }
 CPP_TWIN_CONSTANT = "kGraphicSetLayoutDirtyTwinPattern"
 
@@ -308,7 +347,19 @@ def main() -> int:
     failures = 0
     for sig in SIGNATURES:
         rvas, note = resolve(target, sig)
-        if len(rvas) == 1:
+        if sig.expect_multiple:
+            count = len(rvas)
+            within = count >= sig.min_hits and (sig.max_hits == 0 or count <= sig.max_hits)
+            if within:
+                verdict = "多命中(预期)"
+            elif count == 0:
+                verdict = "未命中"
+            else:
+                verdict = "命中数异常"
+            shown = f"{count} 个"
+            if not within:
+                failures += 1
+        elif len(rvas) == 1:
             verdict = "唯一命中"
             shown = hex(rvas[0])
         elif not rvas:
@@ -322,7 +373,7 @@ def main() -> int:
 
         print(f"{sig.name:28s} {verdict:10s} {shown:>12s}  {note}")
 
-        if verdict != "唯一命中" and baseline is not None:
+        if verdict not in ("唯一命中", "多命中(预期)") and baseline is not None:
             old_hits = scan(baseline, sig.pattern)
             if old_hits:
                 print(f"{'':28s} 旧版基线 RVA {hex(sig.baseline_rva)}，旧版命中 {len(old_hits)} 处")

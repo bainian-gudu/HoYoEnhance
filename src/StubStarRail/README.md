@@ -7,14 +7,15 @@
 
 源码已经落地，当前等待 Windows 侧的 MSVC 编译与游戏内验证。定位层已改为
 **动态特征码**（不写死 RVA），对 4.5.0 与 2026-09-28 新版 `GameAssembly.dll`
-两版分别扫描都「全部目标唯一命中」（证据见 `SIGNATURES.md`）：
+两版分别扫描：必需目标全部唯一命中，路径查找与 `TextMeshProUGUI` 的多命中目标
+命中数落在预期区间（证据见 `SIGNATURES.md`）：
 
 | 文件 | 职责 |
 | --- | --- |
 | `dllmain.cpp` | 模块生命周期、共享内存连接、定位重试、状态机与错误码 |
 | `Il2CppBridge.h/.cpp` | 动态特征码定位（唯一命中 + 相邻孪生校验）、函数头校验、IL2CPP 对象读写（类名 / 字符串 / float） |
 | `AntiBlur.h/.cpp` | ① 反角色虚化：Hook `BaseShaderPropertyTransition` 相机 Dither，把 Camera 来源 alpha 压回 1.0；② 反场景景深：Hook `RPGDepthOfField.IsActiveImpl` 返回 false |
-| `HideUid.h/.cpp` | Hook `Graphic.SetVerticesDirty`，按文本内容识别 UID 并写 `m_Color.a` = 0；`RPGApplication.OnUpdate` 只做还原与状态上报 |
+| `HideUid.h/.cpp` | 隐藏 UID 水印：路径查找（`GameObject.Find` + `GetComponent("UnityEngine.UI.Graphic")`）与文本识别（`Graphic` / `TMP_Text` / `TextMeshProUGUI` 的 Dirty 入口）两条路一起上；`RPGApplication.OnUpdate` 做路径查找、还原与状态上报 |
 | `SIGNATURES.md` | 每条特征码的字节来源、两版命中数、候选身份与重推方法论 |
 | `CMakeLists.txt` / `StarRailStub.def` | 独立构建 `StarRailStub.dll`，导出 `WndProc` |
 
@@ -97,30 +98,60 @@
 版本更新后的重推流程（命中数比对 + 相似性比对 + 反汇编复核）也记在那里。
 离线比对工具是 `tools/starrail-signatures/check_signatures.py`（纯 Python 无依赖）。
 
-## 五、功能 1：隐藏 UID（按文本内容识别）
+## 五、功能 1：隐藏 UID（路径查找 + 文本识别，两条路一起上）
 
-旧实现按两条固定层级路径（`/UIRoot/AboveDialog/.../VersionText` 与
-`/UIRoot/Page/MobilePhoneMainPage/.../UID/NumText`）找 `GameObject`，依赖
-`GameObject.Find` / `GetComponent` 定位与节点路径稳定。节点改名或界面重构就会失效，
-而且 `Find` 天然多命中，只能靠硬试，风险高。
+UID 水印有两个来源可能：一是挂在固定层级节点上的 `Graphic`（`UI.Text` / `Image` /
+Sprite 都可能），二是运行时动态创建的文本组件。任何单一路径都有覆盖不到的角落，
+所以这里**两条路同时启用，互为兜底**：
 
-新实现改为 Hook `UnityEngine.UI.Graphic.SetVerticesDirty` —— 它是 UI 颜色 / 文本
-变化的必经点，在这里能直接拿到 `Graphic` 实例，**完全不依赖任何 UI 节点名**：
+### A. 路径查找（4.5.0 旧方式，主路径）
 
-1. 从 `Graphic` 拿 `UnityEngine.UI.Text` 组件，读 `Text.m_Text`
-   （**偏移已复核**：`UnityEngine.UI.Text.m_Text // Offset: 0xF8`，dump.cs 实测）；
-2. 判定规则：
+在主线程 tick（`RPGApplication.OnUpdate`，每 15 帧一次）里按固定层级路径找
+`GameObject`，再取它上面的 `UnityEngine.UI.Graphic`，直接写 `m_Color.a = 0`：
+
+```
+/UIRoot/AboveDialog/BetaHintDialog(Clone)/Contents/VersionText
+/UIRoot/Page/MobilePhoneMainPage(Clone)/Content/Content/LeftPlane/Tittle/UID/NumText
+```
+
+这条路**不读文本、不看组件类型** —— 水印无论用 `UI.Text`、TMP 还是 `Image` /
+`Sprite`，只要挂在节点上就能抓到，是文本识别失效时唯一可靠的兜底。
+
+`GameObject.Find` / `GameObject.GetComponent(string)` 的特征码是 IL2CPP 的 icall
+转发桩，模块里天然多命中（Find 旧版 9 / 新版 8 处，GetComponent 两版各 8 处），
+而且「第几个命中」不稳定。因此运行时不按序号挑，而是在主线程逐个候选试调用，
+用返回值类名交叉校验（`Find` 结果必须是 `GameObject`，`GetComponent` 结果必须是
+`Graphic`），确认后缓存真身；全部调用都套 SEH，路径当前不存在就下次重试。
+
+### B. 文本识别（辅助路径）
+
+在 UI 文本重建的必经点上拿 `Graphic` 实例，读文本内容判定，**不依赖任何 UI 节点名**：
+
+1. Hook 三个入口：
+   - `UnityEngine.UI.Graphic.SetVerticesDirty`（唯一命中 + 相邻孪生校验），覆盖
+     `UI.Text` 及其子类；
+   - `TMPro.TMP_Text.SetVerticesDirty`（唯一命中），TMP_Text 覆写了基类实现，
+     不挂它就会漏掉全部 TMP 文本；
+   - `TMPro.TextMeshProUGUI` 的两个同构 Dirty 入口（`SetVerticesDirty` 与
+     `SetMaterialDirty` 编译成了同样的指令序列，静态无法区分，两个都挂）；
+2. 类名含 `Text` 的组件才处理（`Text` / `LocalizedText` / `TMP_Text` /
+   `TextMeshProUGUI` ...）；
+3. 同时尝试两个文本字段偏移，取真正是 il2cpp string 的那个：
+   - `UnityEngine.UI.Text.m_Text` `+0xF8`（dump.cs 实测）；
+   - `TMPro.TMP_Text.m_text` `+0xF0`（dump.cs 实测）；
+4. 判定规则：
    - 文本含 `UID`（忽略大小写）且带 6~12 位连续数字 → 判定为 UID 水印，
      同时把这串数字记为「已知 UID」；
    - 文本本身就是 6~12 位纯数字，且与「已知 UID」完全一致 → 判定为 UID
      （覆盖只显示数字的资料页）；
-3. 命中后把 `Graphic.m_Color` 的 alpha 写 0
+5. 命中后把 `Graphic.m_Color` 的 alpha 写 0
    （**偏移已复核**：`UnityEngine.UI.Graphic.m_Color // Offset: 0x20`，alpha 在
    `+0x20+0x0C`），并记录原值以便关闭开关时还原。
 
-`RPGApplication.OnUpdate` 仍然 Hook，但只作为主线程入口做关闭时的还原与状态上报，
-不再负责查找节点。所有读写都先做可读 / 可写校验再套 SEH；还原前重新校验类名，
-避免对象被 GC 回收后误写无关对象。
+`RPGApplication.OnUpdate` 只作为主线程入口做路径查找、关闭时的还原与状态上报。
+所有读写都先做可读 / 可写校验再套 SEH；还原前重新校验类名，避免对象被 GC 回收后
+误写无关对象。状态位 `IpcHideUidState::PathReady` 反映路径查找是否已探测到有效
+入口，便于 Host 区分「两条路都就绪」与「只有文本识别就绪」。
 
 不要用「关掉 `s_UICamera`」那种做法（Pipsi 的 `hide_ui.cpp`）：会把整个 HUD 一起藏掉。
 

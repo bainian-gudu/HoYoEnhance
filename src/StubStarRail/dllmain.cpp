@@ -5,8 +5,10 @@
 //   1) 反角色虚化：Hook BaseShaderPropertyTransition 的相机 Dither 入口，
 //      在开启时把 Camera 来源的透明值压回 1.0；
 //   2) 反场景景深虚化：Hook RPGDepthOfField.IsActiveImpl，开启时返回 false；
-//   3) 隐藏 UID 水印：Hook UnityEngine.UI.Graphic.SetVerticesDirty，按文本内容
-//      识别 UID 并把 m_Color.a 写 0；Hook RPGApplication.OnUpdate 只做还原与上报。
+//   3) 隐藏 UID 水印：两条路一起上 —— 路径查找（4.5.0 旧方式，
+//      GameObject.Find + GetComponent("UnityEngine.UI.Graphic") 直接写 m_Color.a）
+//      与文本识别（Hook Graphic / TMP_Text / TextMeshProUGUI 的 Dirty 入口，
+//      按文本内容判定）；Hook RPGApplication.OnUpdate 做路径查找、还原与上报。
 //
 // 本模块不处理帧率：星铁解锁帧率由 Host 的 StarRailFpsRegistry.cs 直接写注册表。
 // 本模块不修改游戏目录、不碰存档与网络。
@@ -203,7 +205,12 @@ namespace
         }
 
         if (!HideUid::Initialize(g_ipc, functions.rpgApplicationOnUpdate,
-                                 functions.graphicSetVerticesDirty))
+                                 functions.graphicSetVerticesDirty,
+                                 functions.tmpTextSetVerticesDirty,
+                                 functions.tmpUguiDirtyCount > 0 ? functions.tmpUguiDirty[0]
+                                                                : nullptr,
+                                 functions.tmpUguiDirtyCount > 1 ? functions.tmpUguiDirty[1]
+                                                                : nullptr))
         {
             g_ipc->Status = IpcStatus::Error;
             g_ipc->LastError = kErrHideUidHook;

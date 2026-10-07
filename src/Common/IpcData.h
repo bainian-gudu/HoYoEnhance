@@ -43,6 +43,7 @@ enum class IpcHideUidState : int32_t
     None      = 0,
     Ready     = 1 << 0,  // 三个 il2cpp 定位函数已解析，具备隐藏能力
     Active    = 1 << 1,  // 当前处于隐藏生效状态
+    PathReady = 1 << 2,  // 路径查找（4.5.0 旧方式）已探测到有效 Find / GetComponent
 };
 
 #pragma pack(push, 8)

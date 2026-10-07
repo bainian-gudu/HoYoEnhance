@@ -26,6 +26,13 @@
 
 namespace Il2CppBridge
 {
+    /// <summary>
+    /// 路径查找候选上限。GameObject.Find / GameObject.GetComponent(string) 的
+    /// 特征码是 IL2CPP 的 icall 转发桩，天然多命中（4.5.0 与 2026-09-28 两版都
+    /// 各命中 8 处），因此不能用「唯一命中」判定，改由主线程运行时探测挑出真身。
+    /// </summary>
+    constexpr size_t kMaxPathCandidates = 24;
+
     /// <summary>已定位的星铁 il2cpp 目标地址。</summary>
     struct Functions
     {
@@ -35,6 +42,20 @@ namespace Il2CppBridge
         void* ditherSetElevationAlpha = nullptr;  // BaseShaderPropertyTransition.SetElevationDitherAlphaValue
         void* dofIsActiveImpl = nullptr;          // RPG.CustomRP.RPGDepthOfField.IsActiveImpl
         void* graphicSetVerticesDirty = nullptr;  // Graphic.SetVerticesDirty（UID 隐藏主路径）
+        void* tmpTextSetVerticesDirty = nullptr;  // TMPro.TMP_Text.SetVerticesDirty（TMP 文本路径）
+
+        // TMPro.TextMeshProUGUI 覆写了 SetVerticesDirty；它与同构的 SetMaterialDirty
+        // 字节几乎完全一致（同一版内两条候选的固定字节相同），静态无法区分，
+        // 因此两个候选都交给 HideUid 挂上：命中的那个是真正的文本重建通知点，
+        // 另一个只是多一次无害的判定。
+        void* tmpUguiDirty[2] = {};
+        size_t tmpUguiDirtyCount = 0;
+
+        // 路径查找兜底（4.5.0 旧方式）。候选多命中，运行时探测后缓存真身。
+        void* findCandidates[kMaxPathCandidates] = {};
+        size_t findCandidateCount = 0;
+        void* getComponentCandidates[kMaxPathCandidates] = {};
+        size_t getComponentCandidateCount = 0;
     };
 
     /// <summary>定位结果，用于宿主错误码分级。</summary>
@@ -88,4 +109,20 @@ namespace Il2CppBridge
 
     /// <summary>最近一次 Resolve 的地址表（供主线程 tick 读取）。</summary>
     const Functions& Resolved();
+
+    /// <summary>
+    /// 主线程：按 UI 层级路径取 UnityEngine.UI.Graphic。
+    ///
+    /// 这是 4.5.0 旧实现的方式：GameObject.Find(path) → GetComponent("UnityEngine.UI.Graphic")，
+    /// 命中后直接写 Graphic.m_Color.a，对组件类型免疫 —— 无论水印是 Text、TMP 还是
+    /// Image / Sprite，只要挂在节点上就能抓到，是文本识别失效时的兜底路径。
+    ///
+    /// Find / GetComponent 的候选多命中，首次调用会逐个探测（校验返回值类名），
+    /// 成功后缓存真身；路径当前不存在或探测失败返回 nullptr，下次仍会重试。
+    /// 所有游戏调用都用 SEH 包住，绝不把异常抛回 Hook。
+    /// </summary>
+    void* FindGraphicByPath(const char* path);
+
+    /// <summary>路径查找是否已探测到有效的 Find / GetComponent（供状态上报）。</summary>
+    bool IsPathLookupReady();
 }
