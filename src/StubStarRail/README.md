@@ -104,7 +104,7 @@ UID 水印有两个来源可能：一是挂在固定层级节点上的 `Graphic`
 Sprite 都可能），二是运行时动态创建的文本组件。任何单一路径都有覆盖不到的角落，
 所以这里**两条路同时启用，互为兜底**：
 
-### A. 路径查找（4.5.0 旧方式，主路径）
+### A. 路径查找（4.5.0 旧方式，兜底路径）
 
 在主线程 tick（`RPGApplication.OnUpdate`，每 15 帧一次）里按固定层级路径找
 `GameObject`，再取它上面的 `UnityEngine.UI.Graphic`，直接写 `m_Color.a = 0`：
@@ -118,12 +118,18 @@ Sprite 都可能），二是运行时动态创建的文本组件。任何单一�
 `Sprite`，只要挂在节点上就能抓到，是文本识别失效时唯一可靠的兜底。
 
 `GameObject.Find` / `GameObject.GetComponent(string)` 的特征码是 IL2CPP 的 icall
-转发桩，模块里天然多命中（Find 旧版 9 / 新版 8 处，GetComponent 两版各 8 处），
-而且「第几个命中」不稳定。因此运行时不按序号挑，而是在主线程逐个候选试调用，
-用返回值类名交叉校验（`Find` 结果必须是 `GameObject`，`GetComponent` 结果必须是
-`Graphic`），确认后缓存真身；全部调用都套 SEH，路径当前不存在就下次重试。
+转发桩，模块里天然多命中（Find 旧版 9 / 新版 8 处，GetComponent 两版各 8 处）。
+**不能逐个候选硬试**：多出来的命中大多是无关函数，反复调用会误触发副作用
+（4.6 实测：开启遮挡 UID 后打开任意页面出问题、转视角卡顿）。因此：
 
-### B. 文本识别（辅助路径）
+- `Find` 只调用文档记录的那个下标（`Il2CppBridge::kPreferredFindIndex`，4.5.0 与
+  4.6 都是第 4 个命中），不再遍历；
+- `GetComponent` 在有效 `GameObject` 上试，用类名（含 `Graphic`）或对象头 + `m_Color`
+  四分量合法来挑真身，确认后缓存。
+
+全部调用都套 SEH；路径当前不存在就下次重试。
+
+### B. 文本识别（主路径）
 
 在 UI 文本重建的必经点上拿 `Graphic` 实例，读文本内容判定，**不依赖任何 UI 节点名**：
 
@@ -134,8 +140,9 @@ Sprite 都可能），二是运行时动态创建的文本组件。任何单一�
      不挂它就会漏掉全部 TMP 文本；
    - `TMPro.TextMeshProUGUI` 的两个同构 Dirty 入口（`SetVerticesDirty` 与
      `SetMaterialDirty` 编译成了同样的指令序列，静态无法区分，两个都挂）；
-2. 类名含 `Text` 的组件才处理（`Text` / `LocalizedText` / `TMP_Text` /
-   `TextMeshProUGUI` ...）；
+2. **不按类名过滤**：4.6 起 `ObjectClassName` 对部分对象返回 null，「拿不到类名就
+   跳过」会让识别彻底失效；而且读类名每次要做几次 `VirtualQuery`，放在
+   `SetVerticesDirty` 热路径会拖慢 UI。直接按文本字段判定，命中后才读类名写诊断；
 3. 同时尝试两个文本字段偏移，取真正是 il2cpp string 的那个：
    - `UnityEngine.UI.Text.m_Text` `+0xF8`（dump.cs 实测）；
    - `TMPro.TMP_Text.m_text` `+0xF0`（dump.cs 实测）；
@@ -155,21 +162,12 @@ Sprite 都可能），二是运行时动态创建的文本组件。任何单一�
 
 不要用「关掉 `s_UICamera`」那种做法（Pipsi 的 `hide_ui.cpp`）：会把整个 HUD 一起藏掉。
 
-### 排查：运行时诊断日志
+### 4.6 适配记录
 
-UID 节点路径会随版本变，出现「开关已开但水印还在」时，Stub 会把探测过程写进
-`starrail-stub-diag.log`（优先写 WSL 工作区，失败退到 `%TEMP%`；文件名已加进
-`.gitignore`）：
-
-- `[resolve]`：各目标地址、候选数与 `GameAssembly.dll` 基址（可换算 RVA 对照 dump）；
-- `[path] probe /UIRoot find[i]`：用必定存在的探针路径验证 `Find` 候选本身是否可用；
-- `[path] find[i]` / `[path] getComponent[i]`：每个候选的返回值与返回对象类名；
-- `[path] resolved`：探测成功后缓存的 `Find` / `GetComponent` 与命中的 Graphic 类名；
-- `[graphic] class=`：Hook 到过的 Graphic 类名（去重，最多 32 条）；
-- `[uid] matched text`：文本识别命中的类名与字段偏移。
-
-据此可以区分三种情况：`Find` 候选全错（探测不到 `GameObject`）、UID 节点路径已变
-（`Find` 可用但返回空）、或 Hook 根本没被触发（日志里没有任何 `[graphic]` 行）。
+4.6 上 `ObjectClassName` 对部分对象返回 null，路径查找的多候选硬试还会误调无关的
+il2cpp 函数（表现为「开关已开但水印还在」+ 开任意页面出问题 / 转视角卡顿）。适配
+时曾临时加过 `starrail-stub-diag.log` 运行时日志（`[resolve]` / `[path]` /
+`[graphic]` / `[uid]` 等），问题定位并修好后已随本次收尾一并移除。
 
 ## 六、功能 2 / 3：两项反虚化
 

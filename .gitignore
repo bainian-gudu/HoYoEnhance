@@ -70,6 +70,3 @@ tools/devcheck/front/_selftest/
 tools/devcheck/.repo-lock
 tools/devcheck/.selftest-backup/
 !tools/devcheck/README.md
-
-# StarRailStub 运行时诊断日志（排查 UID 节点路径时由注入模块写出）
-starrail-stub-diag.log

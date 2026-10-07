@@ -134,11 +134,4 @@ namespace Il2CppBridge
 
     /// <summary>路径查找是否已探测到有效的 Find / GetComponent（供状态上报）。</summary>
     bool IsPathLookupReady();
-
-    /// <summary>
-    /// 诊断日志：把一行文本追加到 WSL 工作区里的 starrail-stub-diag.log
-    /// （优先 \\wsl.localhost\Ubuntu\...，失败退到 %TEMP%）。只在排查 UID 路径
-    /// 时使用，正常运行时也只在探测阶段写少量行，不会持续刷盘。
-    /// </summary>
-    void DiagLog(const char* line);
 }

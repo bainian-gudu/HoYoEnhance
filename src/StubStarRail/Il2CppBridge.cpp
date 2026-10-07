@@ -21,8 +21,6 @@
 
 #include <Psapi.h>
 
-#include <cstdarg>
-#include <cstdio>
 #include <cstring>
 #include <new>
 
@@ -139,74 +137,10 @@ namespace
 
     Il2CppBridge::Functions g_functions{};
 
-    // ---- 诊断日志（排查 4.6 UID 节点路径用）------------------------------
-    // 只在 Resolve 完成与路径探测阶段写少量行；正常情况下每个进程最多几十行。
-    HANDLE g_diagFile = INVALID_HANDLE_VALUE;
-    bool g_diagTried = false;
-
-    HANDLE OpenDiagFile()
-    {
-        // 优先写 WSL 工作区：Windows 进程通过 9p 写进去，WSL 里可直接读。
-        const wchar_t* candidates[] = {
-            L"\\\\wsl.localhost\\Ubuntu\\home\\tushanhonghong\\workspace\\HoYoEnhance\\starrail-stub-diag.log",
-            L"\\\\wsl$\\Ubuntu\\home\\tushanhonghong\\workspace\\HoYoEnhance\\starrail-stub-diag.log",
-        };
-        for (const wchar_t* path : candidates)
-        {
-            HANDLE file = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                                      nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-            if (file != INVALID_HANDLE_VALUE)
-            {
-                return file;
-            }
-        }
-
-        wchar_t temp[MAX_PATH]{};
-        if (GetTempPathW(MAX_PATH, temp) > 0)
-        {
-            wchar_t path[MAX_PATH * 2]{};
-            lstrcpynW(path, temp, MAX_PATH);
-            lstrcatW(path, L"StarRailStub-diag.log");
-            return CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                               nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-        }
-        return INVALID_HANDLE_VALUE;
-    }
-
-    void DiagLogLine(const char* line)
-    {
-        if (!g_diagTried)
-        {
-            g_diagTried = true;
-            g_diagFile = OpenDiagFile();
-        }
-        if (g_diagFile == INVALID_HANDLE_VALUE || !line)
-        {
-            return;
-        }
-
-        DWORD written = 0;
-        WriteFile(g_diagFile, line, static_cast<DWORD>(std::strlen(line)), &written, nullptr);
-        WriteFile(g_diagFile, "\r\n", 2, &written, nullptr);
-        FlushFileBuffers(g_diagFile);
-    }
-
-    void DiagLogf(const char* format, ...)
-    {
-        char buffer[512]{};
-        va_list args;
-        va_start(args, format);
-        std::vsnprintf(buffer, sizeof(buffer), format, args);
-        va_end(args);
-        DiagLogLine(buffer);
-    }
-
     // ---- 路径查找运行时状态（只在游戏主线程访问）--------------------------
     void* g_findResolved = nullptr;          // 探测确定的 GameObject.Find
     void* g_getComponentResolved = nullptr;  // 探测确定的 GameObject.GetComponent(string)
     bool g_pathLookupProbed = false;         // 是否已成功探测（成功后才置位）
-    bool g_pathDiagFirstTry = false;         // 首次探测尝试是否已写日志
-    bool g_pathDiagSuccess = false;          // 首次探测成功是否已写日志
 
     // 自建 IL2CPP 字符串：星铁没有可用的 il2cpp_string_new 导出，参考实现同样
     // 手工拼 length + chars。只在 Find / GetComponent 调用期间有效，调用后立即
@@ -558,14 +492,6 @@ namespace Il2CppBridge
                           out.getComponentCandidateCount, kMaxPathCandidates);
 
         g_functions = out;
-        DiagLogLine("---- StarRailStub session start ----");
-        DiagLogf("[resolve] onUpdate=0x%p ditherMerge=0x%p ditherDist=0x%p ditherElev=0x%p "
-                 "dof=0x%p graphic=0x%p tmpText=0x%p tmpUgui=%zu find=%zu getComponent=%zu "
-                 "base=0x%p",
-                 out.rpgApplicationOnUpdate, out.ditherSetAlphaValue, out.ditherSetDistanceAlpha,
-                 out.ditherSetElevationAlpha, out.dofIsActiveImpl, out.graphicSetVerticesDirty,
-                 out.tmpTextSetVerticesDirty, out.tmpUguiDirtyCount, out.findCandidateCount,
-                 out.getComponentCandidateCount, static_cast<void*>(gameAssembly));
         return ResolveStatus::Ok;
     }
 
@@ -730,11 +656,6 @@ namespace Il2CppBridge
         return true;
     }
 
-    void DiagLog(const char* line)
-    {
-        DiagLogLine(line);
-    }
-
     // UnityEngine.UI.Graphic.m_Color：RGBA 四个 float（分量在 [0,1]）。
     // 类名读不到时用它做兜底校验，见 IsPlausibleGraphic。
     constexpr size_t kGraphicColorOffset = 0x20;
@@ -742,56 +663,11 @@ namespace Il2CppBridge
     // GameObject.Find 在 kGameObjectFindPattern 命中集合里的下标。
     //   4.5.0        第 4 个命中 = 0x1DEDE300
     //   2026-09-28   第 4 个命中 = 0x1F3C1130
-    //   当前 4.6 运行日志里 find[3] = RVA 0x1F3C1130，与上面两版一致。
-    // 只信这一个下标：其余命中是无关的 il2cpp icall 桩（日志实测返回垃圾指针），
-    // 逐个硬试会调用到有副作用的函数（4.6 实测：开启遮挡 UID 后打开背包出问题）。
-    // 下标失效时最多是「这次不隐藏」，绝不去调其它函数。
+    // 4.6 实测同样是第 4 个命中。
+    // 只信这一个下标：其余命中是无关的 il2cpp icall 桩，逐个硬试会调用到有副作用的
+    // 函数（4.6 实测：开启遮挡 UID 后打开背包出问题、转视角卡顿）。下标失效时最多是
+    // 「这次不隐藏」，绝不去调其它函数。
     constexpr size_t kPreferredFindIndex = 3;
-
-    /// <summary>
-    /// 诊断：把一个对象头的原始字段写进日志（klass / klass->name 指针 + 名字前
-    /// 几个字节）。用于判断 ObjectClassName 返回 null 到底是「对象不是 GameObject」
-    /// 还是「IL2CPP 对象头偏移读不到」。
-    /// </summary>
-    void DiagDumpObjectHeader(const char* tag, size_t index, void* object)
-    {
-        if (!object)
-        {
-            return;
-        }
-
-        void* klass = nullptr;
-        const bool klassOk = ReadBytes(static_cast<const uint8_t*>(object) + kIl2CppClassOffset,
-                                       &klass, sizeof(klass));
-        void* namePtr = nullptr;
-        bool nameOk = false;
-        if (klassOk && klass)
-        {
-            nameOk = ReadBytes(static_cast<const uint8_t*>(klass) + kIl2CppClassNameOffset,
-                               &namePtr, sizeof(namePtr));
-        }
-
-        char nameHead[24]{};
-        if (nameOk && namePtr && IsReadable(namePtr, sizeof(nameHead)))
-        {
-            std::memcpy(nameHead, namePtr, sizeof(nameHead));
-            for (char& c : nameHead)
-            {
-                if (c < 0x20 || c > 0x7E)
-                {
-                    c = '.';
-                }
-            }
-            nameHead[sizeof(nameHead) - 1] = '\0';
-        }
-        else
-        {
-            std::strcpy(nameHead, "(unreadable)");
-        }
-
-        DiagLogf("%s[%zu] object=0x%p klass=0x%p name=0x%p bytes=%s", tag, index, object,
-                 klassOk ? klass : nullptr, nameOk ? namePtr : nullptr, nameHead);
-    }
 
     /// <summary>
     /// 一个指针是否像 UnityEngine.UI.Graphic。
@@ -837,13 +713,6 @@ namespace Il2CppBridge
         if (!path || functions.findCandidateCount == 0 ||
             functions.getComponentCandidateCount == 0)
         {
-            if (!g_pathDiagFirstTry)
-            {
-                g_pathDiagFirstTry = true;
-                DiagLogf("[path] unavailable: path=%s findCandidates=%zu getComponentCandidates=%zu",
-                         path ? path : "(null)", functions.findCandidateCount,
-                         functions.getComponentCandidateCount);
-            }
             return nullptr;
         }
 
@@ -853,33 +722,7 @@ namespace Il2CppBridge
             return nullptr;
         }
 
-        const bool logTry = !g_pathDiagFirstTry;
-        if (logTry)
-        {
-            g_pathDiagFirstTry = true;
-            DiagLogf("[path] probe start: path=%s findCandidates=%zu getComponentCandidates=%zu",
-                     path, functions.findCandidateCount, functions.getComponentCandidateCount);
-
-            // 只探针文档记录的那个 Find 候选（见 kPreferredFindIndex）：/UIRoot
-            // 能返回 GameObject 就说明它是对的。不再遍历其它候选 —— 那些是无关的
-            // icall 桩，调用它们有副作用。
-            ScopedIl2CppString probe("/UIRoot");
-            if (probe.Valid() && functions.findCandidateCount > kPreferredFindIndex)
-            {
-                void* findCandidate = functions.findCandidates[kPreferredFindIndex];
-                void* found = CallFindRaw(findCandidate, probe.Get());
-                const char* probeClass = found ? ObjectClassName(found) : nullptr;
-                DiagLogf("[path] probe /UIRoot find[%zu] 0x%p -> 0x%p class=%s",
-                         kPreferredFindIndex, findCandidate, found,
-                         probeClass ? probeClass : "(null)");
-                if (found)
-                {
-                    DiagDumpObjectHeader("[path] probeHeader", kPreferredFindIndex, found);
-                }
-            }
-        }
-
-        // 探测成功后只用缓存的真身，避免每帧把全部候选都调一遍。
+        // 探测成功后只用缓存的真身，避免每次把全部候选都调一遍。
         if (g_pathLookupProbed)
         {
             void* gameObject = CallFindRaw(g_findResolved, pathString.Get());
@@ -912,15 +755,6 @@ namespace Il2CppBridge
 
         void* findCandidate = functions.findCandidates[kPreferredFindIndex];
         void* gameObject = CallFindRaw(findCandidate, pathString.Get());
-        if (logTry)
-        {
-            DiagLogf("[path] find[%zu] 0x%p -> 0x%p", kPreferredFindIndex, findCandidate,
-                     gameObject);
-            if (gameObject)
-            {
-                DiagDumpObjectHeader("[path] findHeader", kPreferredFindIndex, gameObject);
-            }
-        }
         if (!gameObject)
         {
             // 路径当前不存在（UI 尚未加载 / 该界面未打开），下次再试。
@@ -931,17 +765,7 @@ namespace Il2CppBridge
         {
             void* getComponentCandidate = functions.getComponentCandidates[g];
             void* graphic = CallGetComponentRaw(getComponentCandidate, gameObject, graphicName.Get());
-            if (!graphic)
-            {
-                continue;
-            }
-            const char* className = ObjectClassName(graphic);
-            if (logTry)
-            {
-                DiagLogf("[path] getComponent[%zu] 0x%p -> 0x%p class=%s", g,
-                         getComponentCandidate, graphic, className ? className : "(null)");
-            }
-            if (!IsPlausibleGraphic(graphic))
+            if (!graphic || !IsPlausibleGraphic(graphic))
             {
                 continue;
             }
@@ -949,14 +773,6 @@ namespace Il2CppBridge
             g_findResolved = findCandidate;
             g_getComponentResolved = getComponentCandidate;
             g_pathLookupProbed = true;
-            if (logTry || !g_pathDiagSuccess)
-            {
-                g_pathDiagSuccess = true;
-                DiagLogf("[path] resolved: find#%zu=0x%p getComponent#%zu=0x%p path=%s "
-                         "graphicClass=%s",
-                         kPreferredFindIndex, findCandidate, g, getComponentCandidate, path,
-                         className ? className : "(null)");
-            }
             return graphic;
         }
         return nullptr;

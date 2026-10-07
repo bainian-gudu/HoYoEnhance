@@ -3,26 +3,25 @@
 //
 // 两条路一起上，互为兜底：
 //
-//   A) 路径查找（4.5.0 旧方式，主路径）
-//      在主线程 tick 里按 UI 层级路径 GameObject.Find → GetComponent(
-//      "UnityEngine.UI.Graphic") 直接取到 Graphic 并写 m_Color.a = 0。
-//      这条路对组件类型免疫 —— 水印无论用 Text、TMP 还是 Image / Sprite，
-//      只要挂在节点上就能抓到，也是「文本识别不生效」时唯一可靠的兜底。
-//      Find / GetComponent 的地址由 Il2CppBridge 用运行时探测确定（特征码
-//      天然多命中，不能按序号挑）。
-//
-//   B) 文本识别（辅助路径）
+//   A) 文本识别（主路径，不需要额外调用游戏接口）
 //      1) Hook UnityEngine.UI.Graphic.SetVerticesDirty（唯一命中 + 相邻孪生校验），
 //         它是 UI.Text 系文本变化的必经点；
 //      2) 额外 Hook TMPro.TMP_Text.SetVerticesDirty（唯一命中）与
 //         TMPro.TextMeshProUGUI 的两个同构 Dirty 入口 —— TMP_Text 覆写了
 //         Graphic.SetVerticesDirty，只挂基类会漏掉全部 TMP 文本；
-//      3) 类名含 "Text" 的组件才处理（Text / LocalizedText / TMP_Text /
-//         TextMeshProUGUI ...）；
-//      4) 同时尝试 UI.Text.m_Text（+0xF8）与 TMP_Text.m_text（+0xF0）两个偏移，
-//         取看起来真的是 il2cpp string 的那个；
-//      5) Hook RPG.Client.RPGApplication.OnUpdate 作为主线程 tick：跑路径查找、
+//      3) 不按类名过滤（4.6 起 ObjectClassName 对部分对象返回 null），直接同时尝试
+//         UI.Text.m_Text（+0xF8）与 TMP_Text.m_text（+0xF0）两个偏移，用「指针 /
+//         长度 / 内容」是否合法筛出真正有效的那段文本；
+//      4) Hook RPG.Client.RPGApplication.OnUpdate 作为主线程 tick：跑路径查找、
 //         处理关闭时的还原、上报状态位。
+//
+//   B) 路径查找（兜底，4.5.0 旧方式）
+//      在主线程 tick 里按 UI 层级路径 GameObject.Find → GetComponent(
+//      "UnityEngine.UI.Graphic") 直接取到 Graphic 并写 m_Color.a = 0。
+//      对组件类型免疫 —— 水印无论用 Text、TMP 还是 Image / Sprite，只要挂在节点上
+//      就能抓到。Find 只调用文档记录的下标（见 Il2CppBridge kPreferredFindIndex），
+//      GetComponent 用类名或 m_Color 运行时校验挑真身；不做多候选硬试（会误调无关
+//      的 il2cpp 函数，4.6 实测会干扰游戏）。
 //
 // 文本判定规则（不依赖任何 UI 节点名）：
 //   a) 文本含 "UID"（忽略大小写）且带 6~12 位连续数字 → 判定为 UID 水印，
@@ -38,8 +37,6 @@
 #include "HideUid.h"
 
 #include <atomic>
-#include <cstdarg>
-#include <cstdio>
 #include <cstdint>
 #include <cstring>
 
@@ -123,48 +120,6 @@ namespace
     bool IsDigit(wchar_t c)
     {
         return c >= L'0' && c <= L'9';
-    }
-
-    // ---- 诊断（排查 UID 组件类型 / 节点路径）-----------------------------
-    // 记录 hook 到过的每个 Graphic 类名（去重、限量），便于判断 UID 水印到底用
-    // 的是 UI.Text、TMP 还是 Image；只在出现新类名时写一行日志。
-    constexpr size_t kMaxDiagClassNames = 32;
-    char g_diagClassNames[kMaxDiagClassNames][64]{};
-    size_t g_diagClassNameCount = 0;
-
-    void DiagLogLinef(const char* format, ...)
-    {
-        char buffer[256]{};
-        va_list args;
-        va_start(args, format);
-        std::vsnprintf(buffer, sizeof(buffer), format, args);
-        va_end(args);
-        Il2CppBridge::DiagLog(buffer);
-    }
-
-    void DiagRememberClassName(const char* name)
-    {
-        if (!name || *name == '\0')
-        {
-            return;
-        }
-        for (size_t i = 0; i < g_diagClassNameCount; ++i)
-        {
-            if (std::strcmp(g_diagClassNames[i], name) == 0)
-            {
-                return;
-            }
-        }
-        if (g_diagClassNameCount >= kMaxDiagClassNames)
-        {
-            return;
-        }
-
-        std::strncpy(g_diagClassNames[g_diagClassNameCount], name, 63);
-        g_diagClassNames[g_diagClassNameCount][63] = '\0';
-        ++g_diagClassNameCount;
-
-        DiagLogLinef("[graphic] class=%s", name);
     }
 
     /// <summary>文本里是否出现 "UID"（忽略大小写）。</summary>
@@ -350,26 +305,17 @@ namespace
             return;
         }
 
-        // 不再用类名当门槛：4.6 起 ObjectClassName 对部分对象返回 null，
-        // 「拿不到类名就整个跳过」会让文本识别彻底失效。也不在热路径读类名 ——
-        // ObjectClassName 每次要做几次 VirtualQuery，SetVerticesDirty 每帧被调很多
-        // 次，放在这里会拖慢 UI。直接按文本字段判定，命中后才读类名写诊断。
+        // 不用类名当门槛：4.6 起 ObjectClassName 对部分对象返回 null，
+        // 「拿不到类名就整个跳过」会让文本识别彻底失效；而且读类名每次要做几次
+        // VirtualQuery，SetVerticesDirty 每帧被调很多次，放在热路径会拖慢 UI。
+        // 直接按文本字段判定（偏移不对时读到别的字段，MatchUidTextAtOffset 会因
+        // 「指针 / 长度 / 内容」不合法而挡掉）。
         // UI.Text 与 TMP_Text 的文本字段偏移不同，两个都试一遍。
         for (size_t offset : kTextTextOffsets)
         {
             if (MatchUidTextAtOffset(self, offset))
             {
-                // 只在「真的新隐藏了一个对象」时记日志：UID 文本可能每帧重建，
-                // 每次匹配都写日志 + FlushFileBuffers 会把 UI 拖卡。
-                const size_t before = g_hiddenCount;
                 HideGraphic(self);
-                if (g_hiddenCount != before)
-                {
-                    const char* className = Il2CppBridge::ObjectClassName(self);
-                    DiagRememberClassName(className);
-                    DiagLogLinef("[uid] matched text: class=%s offset=0x%zX",
-                                 className ? className : "(null)", offset);
-                }
                 return;
             }
         }
@@ -426,7 +372,6 @@ namespace
             void* graphic = Il2CppBridge::FindGraphicByPath(path);
             if (graphic)
             {
-                DiagRememberClassName(Il2CppBridge::ObjectClassName(graphic));
                 HideGraphic(graphic);
             }
         }
