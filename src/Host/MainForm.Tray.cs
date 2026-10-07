@@ -37,6 +37,13 @@ internal sealed partial class MainForm
     private GameDescriptor ActiveGameDescriptor => GameCatalog.Get(_service.DisplayGame);
     private GameProfile ActiveGameProfile => _config.Profile(_service.DisplayGame);
 
+    /// <summary>
+    /// 「仅供单机体验」提醒只对原神显示：千星奇域（UGC）是原神专属玩法，
+    /// 星穹铁道没有对应模式，文案里不出现。
+    /// </summary>
+    private static string SoloOnlyNotice(GameDescriptor descriptor) =>
+        descriptor.Id == GameId.StarRail ? string.Empty : "（仅供单机体验）";
+
     private void OnServiceStateForTray()
     {
         if (IsDisposed) return;
@@ -318,12 +325,15 @@ internal sealed partial class MainForm
                 {
                     _trayAntiBlurPerspectiveItem.Checked = profile.AntiBlurPerspective;
                     _trayAntiBlurPerspectiveItem.Text = "反角色虚化";
-                    _trayAntiBlurPerspectiveItem.ToolTipText = "镜头拉近时角色不再透明化（仅供单机体验）";
+                    _trayAntiBlurPerspectiveItem.ToolTipText =
+                        "镜头拉近时角色不再透明化" + SoloOnlyNotice(descriptor);
                 }
                 if (_trayAntiBlurDiveMosaicItem is not null)
                 {
                     _trayAntiBlurDiveMosaicItem.Checked = profile.AntiBlurDiveMosaic;
                     _trayAntiBlurDiveMosaicItem.Visible = descriptor.SupportsDiveMosaic;
+                    _trayAntiBlurDiveMosaicItem.ToolTipText =
+                        "角色入水时不再显示马赛克虚化" + SoloOnlyNotice(descriptor);
                 }
                 if (_trayAntiBlurDofItem is not null)
                 {
@@ -334,7 +344,8 @@ internal sealed partial class MainForm
                 {
                     _trayHideUidItem.Checked = profile.HideUid;
                     _trayHideUidItem.Text = "隐藏 UID";
-                    _trayHideUidItem.ToolTipText = "隐藏水印与资料页上的 UID 文本（仅供单机体验）";
+                    _trayHideUidItem.ToolTipText =
+                        "隐藏水印与资料页上的 UID 文本" + SoloOnlyNotice(descriptor);
                 }
 
                 if (_trayFpsRoot is not null)

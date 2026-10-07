@@ -186,7 +186,7 @@ public class BaseShaderPropertyTransition : UnityEngine.MonoBehaviour {
 
 ## 八、风险与边界
 
-- 星铁有 `mhypbase.dll` 反作弊；联机 / 千星奇域等玩法保持关闭。
+- 星铁有 `mhypbase.dll` 反作弊；请仅在单机环境下使用本模块。
 - 默认关闭，只在用户显式开启时注入；失败即卸载，不做兜底 patch。
 - 本模块只做「反角色虚化 / 反场景景深 / 隐藏 UID」三项，不碰帧率（帧率归注册表），
   也不碰存档与网络。

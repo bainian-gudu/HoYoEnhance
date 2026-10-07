@@ -113,7 +113,7 @@ internal sealed partial class MainForm
         _trayHideUidItem = MakeCheckItem(
             "隐藏 UID",
             ActiveGameProfile.HideUid,
-            "隐藏水印与资料页上的 UID 文本（仅供单机体验）");
+            "隐藏水印与资料页上的 UID 文本" + SoloOnlyNotice(ActiveGameDescriptor));
         _trayHideUidItem.CheckedChanged += (_, _) =>
         {
             if (_syncingUi) return;
@@ -125,7 +125,7 @@ internal sealed partial class MainForm
         _trayAntiBlurPerspectiveItem = MakeCheckItem(
             "反角色虚化",
             ActiveGameProfile.AntiBlurPerspective,
-            "镜头拉近时角色不再透明化（仅供单机体验）");
+            "镜头拉近时角色不再透明化" + SoloOnlyNotice(ActiveGameDescriptor));
         _trayAntiBlurPerspectiveItem.CheckedChanged += (_, _) =>
         {
             if (_syncingUi) return;
@@ -137,7 +137,7 @@ internal sealed partial class MainForm
         _trayAntiBlurDiveMosaicItem = MakeCheckItem(
             "移除水下马赛克",
             ActiveGameProfile.AntiBlurDiveMosaic,
-            "角色入水时不再显示马赛克虚化（仅供单机体验）");
+            "角色入水时不再显示马赛克虚化" + SoloOnlyNotice(ActiveGameDescriptor));
         // 星穹铁道的注入模块没有这项功能，菜单里不出现。
         _trayAntiBlurDiveMosaicItem.Visible = ActiveGameDescriptor.SupportsDiveMosaic;
         _trayAntiBlurDiveMosaicItem.CheckedChanged += (_, _) =>
@@ -151,7 +151,7 @@ internal sealed partial class MainForm
         _trayAntiBlurDofItem = MakeCheckItem(
             "反场景景深虚化",
             ActiveGameProfile.AntiBlurDof,
-            "关闭背景景深模糊（仅供单机体验）");
+            "关闭背景景深模糊");
         // 只有星穹铁道的注入模块提供这一项。
         _trayAntiBlurDofItem.Visible = ActiveGameDescriptor.SupportsDof;
         _trayAntiBlurDofItem.CheckedChanged += (_, _) =>

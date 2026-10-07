@@ -79,7 +79,7 @@ export function SettingsPage({ game, gameConfig, updateGameConfig, config, updat
             {meta.injection.features.map(({ key, title, description }) => (
               <ToggleRow key={key} title={title} description={description} checked={gameConfig[key]} onChange={(value) => updateGameConfig(key, value)} />
             ))}
-            <p className="settings-small-note"><Info size={14} />{meta.injection.features.length} 项功能随游戏进程注入即时生效，由 {meta.injection.module} 独立提供。仅供单机体验，联机与千星奇域等玩法中请保持关闭；游戏版本更新后若未生效，请等待特征适配更新。</p>
+            <p className="settings-small-note"><Info size={14} />{meta.injection.features.length} 项功能随游戏进程注入即时生效，由 {meta.injection.module} 独立提供。{game === 'genshin' ? '仅供单机体验，联机与千星奇域等玩法中请保持关闭；' : ''}游戏版本更新后若未生效，请等待特征适配更新。</p>
           </section>
         </div>
         <section className="control-panel settings-path-panel"><div className="panel-heading"><h2><FolderOpen size={18} />游戏安装位置</h2><button className="text-button" onClick={onPath} disabled={busy}>更改路径<ChevronRight size={15} /></button></div><p className="path-display">{gameConfig.gamePath || '尚未设置游戏路径'}</p><p className="input-help">{meta.pathHint}路径只对当前游戏生效，切换游戏后可以分别设置。</p></section>
