@@ -359,11 +359,17 @@ namespace
         {
             if (MatchUidTextAtOffset(self, offset))
             {
-                const char* className = Il2CppBridge::ObjectClassName(self);
-                DiagRememberClassName(className);
-                DiagLogLinef("[uid] matched text: class=%s offset=0x%zX",
-                             className ? className : "(null)", offset);
+                // 只在「真的新隐藏了一个对象」时记日志：UID 文本可能每帧重建，
+                // 每次匹配都写日志 + FlushFileBuffers 会把 UI 拖卡。
+                const size_t before = g_hiddenCount;
                 HideGraphic(self);
+                if (g_hiddenCount != before)
+                {
+                    const char* className = Il2CppBridge::ObjectClassName(self);
+                    DiagRememberClassName(className);
+                    DiagLogLinef("[uid] matched text: class=%s offset=0x%zX",
+                                 className ? className : "(null)", offset);
+                }
                 return;
             }
         }
