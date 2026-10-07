@@ -252,7 +252,8 @@ internal sealed partial class UnlockService
                 _ipc.ResetForNewInject(profile.TargetFps, activeUnlock,
                     featuresActive && profile.AntiBlurPerspective,
                     featuresActive && descriptor.SupportsDiveMosaic && profile.AntiBlurDiveMosaic,
-                    featuresActive && profile.HideUid);
+                    featuresActive && profile.HideUid,
+                    featuresActive && descriptor.SupportsDof && profile.AntiBlurDof);
                 Volatile.Write(ref _ipcOwnerValue, EncodeGame(game));
                 _lastPushedFps = profile.TargetFps;
                 _lastPushedEnabled = activeUnlock ? 1 : 0;

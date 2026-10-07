@@ -153,7 +153,7 @@ namespace
         g_mapHandle = OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, kIpcMappingName);
         if (!g_mapHandle)
         {
-            g_mapHandle = OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, L"GenshinFpsUnlocker.Shared.v3");
+            g_mapHandle = OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, kIpcMappingNameLocal);
         }
         if (!g_mapHandle)
         {

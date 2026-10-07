@@ -18,6 +18,7 @@ internal sealed partial class MainForm
     private ToolStripMenuItem? _trayEnabledItem;
     private ToolStripMenuItem? _trayAntiBlurPerspectiveItem;
     private ToolStripMenuItem? _trayAntiBlurDiveMosaicItem;
+    private ToolStripMenuItem? _trayAntiBlurDofItem;
     private ToolStripMenuItem? _trayHideUidItem;
     private ToolStripMenuItem? _trayFpsRoot;
     private ContextMenuStrip? _trayMenu;
@@ -214,7 +215,8 @@ internal sealed partial class MainForm
         var descriptor = ActiveGameDescriptor;
         var profile = ActiveGameProfile;
         var anyEnabled = profile.AntiBlurPerspective || profile.HideUid
-                         || (descriptor.SupportsDiveMosaic && profile.AntiBlurDiveMosaic);
+                         || (descriptor.SupportsDiveMosaic && profile.AntiBlurDiveMosaic)
+                         || (descriptor.SupportsDof && profile.AntiBlurDof);
         if (!anyEnabled) return string.Empty;
 
         var active = _config.MasterEnabled;
@@ -240,6 +242,8 @@ internal sealed partial class MainForm
             items.Add(FormatInjectionItem("反虚化", attached, (antiBlurMask & 1) != 0));
         if (descriptor.SupportsDiveMosaic && profile.AntiBlurDiveMosaic)
             items.Add(FormatInjectionItem("马赛克", attached, (antiBlurMask & 2) != 0));
+        if (descriptor.SupportsDof && profile.AntiBlurDof)
+            items.Add(FormatInjectionItem("景深", attached, (antiBlurMask & 8) != 0));
         if (profile.HideUid)
             items.Add(FormatInjectionItem("UID", attached, (hideUidMask & 1) != 0));
 
@@ -320,6 +324,11 @@ internal sealed partial class MainForm
                 {
                     _trayAntiBlurDiveMosaicItem.Checked = profile.AntiBlurDiveMosaic;
                     _trayAntiBlurDiveMosaicItem.Visible = descriptor.SupportsDiveMosaic;
+                }
+                if (_trayAntiBlurDofItem is not null)
+                {
+                    _trayAntiBlurDofItem.Checked = profile.AntiBlurDof;
+                    _trayAntiBlurDofItem.Visible = descriptor.SupportsDof;
                 }
                 if (_trayHideUidItem is not null)
                 {

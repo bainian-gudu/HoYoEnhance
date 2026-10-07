@@ -3,16 +3,19 @@
 崩坏：星穹铁道的注入模块。宿主侧已经按「独立模块」接好，本文件记录**要做到什么、
 怎么做、怎么验**，以及实现前为什么**刻意不塞一个空壳 DLL**。
 
-## 〇、实现状态（2026-09-19）
+## 〇、实现状态（2026-10-07）
 
-源码已经落地，当前等待 Windows 侧的 MSVC 编译与游戏内验证：
+源码已经落地，当前等待 Windows 侧的 MSVC 编译与游戏内验证。定位层已改为
+**动态特征码**（不写死 RVA），对 4.5.0 与 2026-09-28 新版 `GameAssembly.dll`
+两版分别扫描都「全部目标唯一命中」（证据见 `SIGNATURES.md`）：
 
 | 文件 | 职责 |
 | --- | --- |
 | `dllmain.cpp` | 模块生命周期、共享内存连接、定位重试、状态机与错误码 |
-| `Il2CppBridge.h/.cpp` | RVA / 特征码定位、函数头校验、自建 il2cpp string、Find / GetComponent、`m_Color` 读写、`SetVerticesDirty` 通知 |
-| `AntiBlur.h/.cpp` | Hook `BaseShaderPropertyTransition` 的相机 Dither 入口，开启时把 Camera 来源 alpha 压回 1.0 |
-| `HideUid.h/.cpp` | Hook `RPGApplication.OnUpdate`，主线程 tick 隐藏两条 UID 路径并支持恢复 |
+| `Il2CppBridge.h/.cpp` | 动态特征码定位（唯一命中 + 相邻孪生校验）、函数头校验、IL2CPP 对象读写（类名 / 字符串 / float） |
+| `AntiBlur.h/.cpp` | ① 反角色虚化：Hook `BaseShaderPropertyTransition` 相机 Dither，把 Camera 来源 alpha 压回 1.0；② 反场景景深：Hook `RPGDepthOfField.IsActiveImpl` 返回 false |
+| `HideUid.h/.cpp` | Hook `Graphic.SetVerticesDirty`，按文本内容识别 UID 并写 `m_Color.a` = 0；`RPGApplication.OnUpdate` 只做还原与状态上报 |
+| `SIGNATURES.md` | 每条特征码的字节来源、两版命中数、候选身份与重推方法论 |
 | `CMakeLists.txt` / `StarRailStub.def` | 独立构建 `StarRailStub.dll`，导出 `WndProc` |
 
 **解耦约定**：原神 `src/Stub` 与星铁 `src/StubStarRail` 各自拥有完整的业务代码，
@@ -28,12 +31,12 @@
 | 错误码 | 含义 |
 | --- | --- |
 | `0xE101` | 找不到 `GameAssembly.dll` |
-| `0xE102` | `GameObject.Find` 定位失败 |
-| `0xE103` | `GameObject.GetComponent` 定位失败 |
-| `0xE104` | `RPGApplication.OnUpdate` 定位失败 |
-| `0xE105` | 相机 Dither 汇合入口与距离 / 高度兜底入口全部定位失败 |
+| `0xE102` | `RPGApplication.OnUpdate` 特征码定位失败 |
+| `0xE103` | 相机 Dither 汇合入口与距离 / 高度兜底入口全部定位失败 |
+| `0xE104` | `RPGDepthOfField.IsActiveImpl` 特征码定位失败 |
+| `0xE105` | `Graphic.SetVerticesDirty` 特征码定位失败（含相邻孪生校验） |
 | `0xE106` | 反虚化 Hook 创建失败 |
-| `0xE107` | UID 主线程 Hook 创建失败 |
+| `0xE107` | UID 隐藏 Hook 创建失败 |
 | `0xE108` | `MH_EnableHook` 失败 |
 | `0xE109` | 主线程 tick 踩到结构化异常 |
 | `0xE10A` | MinHook 初始化失败 |
@@ -42,12 +45,12 @@
 ## 一、现状：缺这个模块会发生什么
 
 - 宿主 `GameCatalog.StarRail.StubFileName = "StarRailStub.dll"`，只有在星铁档案里
-  开启了画面效果（反角色虚化 / 隐藏 UID）时才会去注入，并且注入前做可信度校验
+  开启了画面效果（反角色虚化 / 反场景景深 / 隐藏 UID）时才会去注入，并且注入前做可信度校验
   （`ModuleTrust`）。
 - DLL 不在 exe 旁时：状态栏显示「缺少 StarRailStub.dll（应位于 …）」，**不注入任何东西**，
   游戏进程保持干净。
 - **星铁的帧率解锁不依赖本模块**：走 `src/Host/StarRailFpsRegistry.cs` 直接改注册表，
-  所以缺模块只影响上面那两项画面效果。
+  所以缺模块只影响上面那三项画面效果。
 
 ## 二、实现前为什么不塞一个空壳 DLL
 
@@ -61,65 +64,81 @@
 | 文件名 | `StarRailStub.dll`（与 `FpsUnlockerStub.dll` 并列放在 exe 旁） |
 | 位数 / 运行库 | x64，静态 CRT（`/MT`），MinHook 直接编入（与 `src/Stub` 一致） |
 | IPC | 复用 `src/Common/IpcData.h`（保留历史兼容映射名，实际值见源码） |
-| Host 写入 | `AntiBlurPerspective`、`HideUid`（外加协议里已有的其它字段） |
-| Stub 写入 | `Status`（Waiting / Ready / Error / Exiting）、`AntiBlurState`（bit0 就绪）、`HideUidState`（bit0 就绪 / bit1 生效中）、`LastError` |
+| Host 写入 | `AntiBlurPerspective`、`AntiBlurDof`、`HideUid`（外加协议里已有的其它字段） |
+| Stub 写入 | `Status`（Waiting / Ready / Error / Exiting）、`AntiBlurState`（bit0 反角色虚化就绪 / bit3 景深就绪）、`HideUidState`（bit0 就绪 / bit1 生效中）、`LastError` |
 | 状态机 | 首轮定位全部成功才置 `Ready`；任何一步失败置 `Error` + 错误码，**绝不半开**（避免游戏侧出现「一半功能生效」） |
 
 宿主不需要再改：DLL 到位即可用；缺失时的提示、退避重试、托盘就绪标记都已实现。
 
-## 四、定位策略：dump.cs 定 RVA，特征码兜底
+## 四、定位策略：动态特征码唯一命中
 
-> 2026-09-19 实测（国服 4.5.0，`GameAssembly.dll` 536 MB / 2026-08-13 构建）：
-> 用 `im-remi/HSRGlobalMetadata`（静态提取器，其测试版本 `OSPRODWin4.5.0` 与本机一致）
-> 生成了完整 `dump.cs`（238 万行 / 128 MB）与 `stringliterals.json`（11 MB）。
-> **下面所有偏移与 RVA 都来自这次 dump，不是猜的。**
+> 2026-09-19 用 `im-remi/HSRGlobalMetadata`（测试版本 `OSPRODWin4.5.0`）对 4.5.0
+> 生成了完整 `dump.cs`（238 万行 / 128 MB）与 `stringliterals.json`（11 MB），
+> 用来确认类名、字段偏移与函数身份。**RVA 只作对照，不再写进代码** ——
+> 2026-09-28 新版重编译后所有 RVA 整体平移，写死的地址必然失效。
 >
 > 两条死路先记下来：`GameAssembly.dll` 只导出 `il2cpp_get_api_table` 一个符号
 > （RVA `0x644ba0`，ImageBase `0x180000000`）；`global-metadata.dat` 是**分区段加密**的
 > （文件头是 `MHY\0`，标准 Il2CppDumper 直接报 "Metadata file not found or encrypted"）。
 
-1. **主路线：直接用 dump.cs 里的 RVA**（`基址 + RVA`），并对目标地址做函数头字节
-   校验（例如 `RPGApplication.OnUpdate` 必须仍以 `56 57 48 83 EC 48 …` 开头）。
-   IL2CPP 的引擎方法在这里是 `jmp [rip+off]` 跳转桩，调用桩等于调用真实实现；
-   函数头校验用于拦住「RVA 仍落在模块内、但已经指向无关函数」的版本更新场景。
-2. **兜底：特征码唯一命中**。参考实现（30launchers）的两条特征码在 4.5.0 上仍然命中，
-   但**必须选对那一处**：
-   - `GameObject.Find(string)` → 命中 9 处，正确的是**第 4 个**（RVA `0x1DEDE300`）
-   - `GameObject.GetComponent(string)` → 命中 8 处，正确的是**第 1 个**（RVA `0x1DEDDE30`）
+1. **只认特征码**：每个目标一条长结构特征码，通配符只打在版本间会变的字节上
+   （rip 相对位移、rel32 调用目标、字段偏移立即数），其余是结构常量。IL2CPP 的
+   引擎方法在模块里是 `jmp [rip+off]` 跳转桩，调用桩等于调用真实实现。
+2. **唯一命中才接受**：必需目标要求全模块唯一命中，多命中一律判失败并报 `Error`。
+   宁可让宿主提示「特征码未命中，等待版本适配」，也不把无关函数当成目标
+   （参考实现的多候选硬试会调用到无关函数，有崩游戏的风险）。
+3. **多命中目标用相邻结构校验**：`Graphic.SetVerticesDirty` 天然 2 命中，用紧邻的
+   孪生函数 `Graphic.SetLayoutDirty`（字段偏移各 +1）在 `0x80` 窗口内二次校验，
+   恰好一个候选满足才接受。
+4. 定位结果必须落在 `GameAssembly.dll` 映像内且可执行，所有读写都过
+   `VirtualQuery` 权限校验 + SEH。
 
-   其余命中是 `Texture2D.SetPixels32`、`Animator.Play` 这类无关函数 ——
-   **不要照搬参考实现「全部无差别调用」的做法**（它靠 SEH 硬试，有崩游戏的风险）。
-   当前实现是：RVA 命中就直接用；RVA 失效时只接受特征码的**唯一命中**，
-   9 处 / 8 处这种多命中场景一律判失败并报 `Error`。宁可让宿主提示版本未适配，
-   也不调用无关函数。
-3. 两条路都失败 → `Error`，卸载并退出工作线程。
+每条特征码的字节来源、两版命中数与候选身份见同目录 `SIGNATURES.md`；
+版本更新后的重推流程（命中数比对 + 相似性比对 + 反汇编复核）也记在那里。
+离线比对工具是 `tools/starrail-signatures/check_signatures.py`（纯 Python 无依赖）。
 
-## 五、功能 1：隐藏 UID（建议先做，风险最低）
+## 五、功能 1：隐藏 UID（按文本内容识别）
 
-- 目标节点（**就这 2 条，按 2 条处理**）：
-  - `/UIRoot/AboveDialog/BetaHintDialog(Clone)/Contents/VersionText`
-  - `/UIRoot/Page/MobilePhoneMainPage(Clone)/Content/Content/LeftPlane/Tittle/UID/NumText`
-- 范围说明：这 2 条分别对应主界面右下角版本号旁的 UID 与手机界面左上角的 UID。原神侧
-  `src/Stub/HideUid.cpp` 同样是 2 条（拍照水印 + 资料页），参考实现 30launchers 的
-  `Sr_adv_addon` 也只列这 2 条。客户端里若还有别的显示点，不在本次范围内 —— 先把这 2 条
-  做稳（能隐藏、能恢复、重建 UI 后仍生效），要扩再单独提。
-- 做法：取到 `UnityEngine.UI.Graphic` 组件，把 `color` 的 alpha 写 0
-  （**偏移已复核**：`UnityEngine.UI.Graphic.m_Color // Offset: 0x20`，与参考实现的
-  `GRAPHIC_COLOR_OFFSET = 0x20` 一致），随后调用 `Graphic.SetVerticesDirty`
-  （RVA `0x1B78C0C0`）触发 UI 重建，让直接写入的字段立即生效。
-  `SetVerticesDirty` 是可选辅助路径：定位失败时降级为只写字段，不让整个模块 Error。
-- 触发：挂一个轻量入口按需刷新（例如 FOV 变化 / 场景切换后），并保存原 alpha，
-  关闭开关时原样恢复。
-- 不要用「关掉 `s_UICamera`」那种做法（Pipsi 的 `hide_ui.cpp`）：会把整个 HUD 一起藏掉。
+旧实现按两条固定层级路径（`/UIRoot/AboveDialog/.../VersionText` 与
+`/UIRoot/Page/MobilePhoneMainPage/.../UID/NumText`）找 `GameObject`，依赖
+`GameObject.Find` / `GetComponent` 定位与节点路径稳定。节点改名或界面重构就会失效，
+而且 `Find` 天然多命中，只能靠硬试，风险高。
 
-## 六、功能 2：反角色虚化
+新实现改为 Hook `UnityEngine.UI.Graphic.SetVerticesDirty` —— 它是 UI 颜色 / 文本
+变化的必经点，在这里能直接拿到 `Graphic` 实例，**完全不依赖任何 UI 节点名**：
+
+1. 从 `Graphic` 拿 `UnityEngine.UI.Text` 组件，读 `Text.m_Text`
+   （**偏移已复核**：`UnityEngine.UI.Text.m_Text // Offset: 0xF8`，dump.cs 实测）；
+2. 判定规则：
+   - 文本含 `UID`（忽略大小写）且带 6~12 位连续数字 → 判定为 UID 水印，
+     同时把这串数字记为「已知 UID」；
+   - 文本本身就是 6~12 位纯数字，且与「已知 UID」完全一致 → 判定为 UID
+     （覆盖只显示数字的资料页）；
+3. 命中后把 `Graphic.m_Color` 的 alpha 写 0
+   （**偏移已复核**：`UnityEngine.UI.Graphic.m_Color // Offset: 0x20`，alpha 在
+   `+0x20+0x0C`），并记录原值以便关闭开关时还原。
+
+`RPGApplication.OnUpdate` 仍然 Hook，但只作为主线程入口做关闭时的还原与状态上报，
+不再负责查找节点。所有读写都先做可读 / 可写校验再套 SEH；还原前重新校验类名，
+避免对象被 GC 回收后误写无关对象。
+
+不要用「关掉 `s_UICamera`」那种做法（Pipsi 的 `hide_ui.cpp`）：会把整个 HUD 一起藏掉。
+
+## 六、功能 2 / 3：两项反虚化
+
+「2 个反虚化」指两条互相独立的链路：
+
+- **反角色虚化**：相机靠近角色时的半透明 Dither（下面第一小节）；
+- **反场景景深虚化**：背景景深模糊后处理（下面第二小节）。
+
+### 反角色虚化（相机 Dither）
 
 早期实现曾 Hook `VCameraDOFEffectOverride`，但那是**场景景深 DOF**，不是
 「角色靠近镜头变半透明」的机制；所以 UI 显示已开启，实际镜头拉近仍会透明。
 Windows 侧实测也确认：同一 DLL 的隐藏 UID Hook 正常，排除注入与反作弊拦截。
 
 真正的链路是 `RPG.Client.BaseShaderPropertyTransition` 的相机 Dither。
-反汇编确认（dump.cs，4.5.0）：
+反汇编确认（dump.cs，4.5.0；下面的 RVA 只作对照，代码里不写死）：
 
 ```
 public enum DitherSourcePriority {
@@ -135,33 +154,42 @@ public class BaseShaderPropertyTransition : UnityEngine.MonoBehaviour {
     public float DistanceDitherAlpha      // Offset: 0x30
 
     // 私有汇合入口：value / priority / force
-    private bool HBPKIAAKMPE(float, DitherSourcePriority, bool) // RVA: 0x19F1BE00
-    public void SetDistanceDitherAlphaValue(float, bool)        // RVA: 0x19F1C0E0
-    public void SetElevationDitherAlphaValue(float)             // RVA: 0x19F1BD70
-    public void ClearCameraDitherAlpha()                        // RVA: 0x19F1C810
+    private bool HBPKIAAKMPE(float, DitherSourcePriority, bool) // 4.5.0 RVA 0x19F1BE00
+    public void SetDistanceDitherAlphaValue(float, bool)        // 4.5.0 RVA 0x19F1C0E0
+    public void SetElevationDitherAlphaValue(float)             // 4.5.0 RVA 0x19F1BD70
+    public void ClearCameraDitherAlpha()                        // 4.5.0 RVA 0x19F1C810
 }
 ```
 
-- 首选：Hook `HBPKIAAKMPE`。所有距离 / 高度相机 Dither 都会汇入这里；
+- 首选：Hook 私有汇合入口 `HBPKIAAKMPE`。所有距离 / 高度相机 Dither 都会汇入这里；
   仅当 `priority == Camera(1)` 且用户开关开启时，把 `value` 改成 `1.0`，
   再调用原函数。`Logic(2)` 与默认来源不受影响。
 - 兜底：私有入口定位失败时，Hook `SetDistanceDitherAlphaValue` 与
   `SetElevationDitherAlphaValue`，同样只在开关开启时把入参改成 `1.0`。
 - 关闭开关时不改写任何参数，完整保留游戏原始表现。
 
+### 反场景景深虚化（DOF）
+
+`RPG.CustomRP.RPGDepthOfField.IsActiveImpl`（4.5.0 RVA `0x1858CCF0`）是景深后处理的
+总开关。Hook 后：开关开启时直接返回 false（后处理不参与渲染），关闭时转调原函数，
+画面与未注入完全一致。这一项与「角色靠近镜头半透明」是不同链路，两者互不影响。
+
 ## 七、验证清单（需要 Windows + 星铁）
 
 1. 不放 DLL：宿主状态栏显示「缺少 StarRailStub.dll」，游戏内无任何变化。
 2. 放好 DLL + 只开「隐藏 UID」：水印消失，关闭开关能恢复；游戏退出后 DLL 不在进程里。
 3. 只开「反角色虚化」：镜头拉近角色不再透明化；切场景后仍有效。
-4. 版本更新后再跑：定位失败要变成 `Error` 而不是崩游戏（宿主会显示错误码并按退避重试）。
-5. 全程不修改游戏目录里的任何文件（只读 + 内存操作）。
+4. 只开「反场景景深虚化」：背景景深模糊消失，关闭开关能恢复。
+5. 三项同时开：互不干扰，运行状态卡三项都显示「已生效」。
+6. 版本更新后再跑：定位失败要变成 `Error` 而不是崩游戏（宿主会显示错误码并按退避重试）。
+7. 全程不修改游戏目录里的任何文件（只读 + 内存操作）。
 
 ## 八、风险与边界
 
 - 星铁有 `mhypbase.dll` 反作弊；联机 / 千星奇域等玩法保持关闭。
 - 默认关闭，只在用户显式开启时注入；失败即卸载，不做兜底 patch。
-- 本模块只做「反角色虚化 / 隐藏 UID」两项，不碰帧率（帧率归注册表），也不碰存档与网络。
+- 本模块只做「反角色虚化 / 反场景景深 / 隐藏 UID」三项，不碰帧率（帧率归注册表），
+  也不碰存档与网络。
 
 ## 九、继续推进需要什么（一步采集）
 
@@ -223,7 +251,7 @@ dotnet run -c Release --no-build <game-view-dir>
 | `unity-log-tail.txt` | 确认 Unity 日志目录与 Unity 版本 |
 | `info.txt` | 各文件版本 / 大小 / SHA256，用于判断适配的目标版本 |
 
-实现顺序（已完成）：按第四节把 RVA / 特征码定位打通 → 隐藏 UID →
-反角色虚化 → 按第七节清单在 Windows 上验收。
+实现顺序（已完成）：按第四节把动态特征码定位打通 → 隐藏 UID → 反角色虚化 →
+反场景景深 → 按第七节清单在 Windows 上验收。
 
 在那之前，「模块缺失即不注入」就是最稳的状态：帧率解锁照常可用，画面效果保持未就绪提示。

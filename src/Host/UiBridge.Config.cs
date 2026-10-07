@@ -97,6 +97,8 @@ internal sealed partial class UiBridge
             _service.SetAntiBlurPerspective(game, abp.GetValue<bool>());
         if (p["antiBlurDiveMosaic"] is JsonNode abm)
             _service.SetAntiBlurDiveMosaic(game, abm.GetValue<bool>());
+        if (p["antiBlurDof"] is JsonNode abd)
+            _service.SetAntiBlurDof(game, abd.GetValue<bool>());
         if (p["hideUid"] is JsonNode uid)
             _service.SetHideUid(game, uid.GetValue<bool>());
         if (p["gamePath"] is JsonNode path)
@@ -191,6 +193,7 @@ internal sealed partial class UiBridge
         SetBool(profileEl, "enabled", v => profile.Enabled = v);
         SetBool(profileEl, "antiBlurPerspective", v => profile.AntiBlurPerspective = v);
         SetBool(profileEl, "antiBlurDiveMosaic", v => profile.AntiBlurDiveMosaic = v);
+        SetBool(profileEl, "antiBlurDof", v => profile.AntiBlurDof = v);
         SetBool(profileEl, "hideUid", v => profile.HideUid = v);
 
         // 兼容更早的扁平字段名：gamePathHint
@@ -260,6 +263,7 @@ internal sealed partial class UiBridge
             Enabled = profile.Enabled,
             AntiBlurPerspective = profile.AntiBlurPerspective,
             AntiBlurDiveMosaic = profile.AntiBlurDiveMosaic,
+            AntiBlurDof = profile.AntiBlurDof,
             HideUid = profile.HideUid,
             GamePath = profile.GamePath,
         };

@@ -14,6 +14,7 @@ export const FEATURE_ICONS: Record<GameFeatureKey, LucideIcon> = {
   hideUid: EyeOff,
   antiBlurPerspective: WandSparkles,
   antiBlurDiveMosaic: WandSparkles,
+  antiBlurDof: WandSparkles,
 };
 
 /** 小尺寸游戏标记（侧栏分组、顶部切换器、状态栏）。 */

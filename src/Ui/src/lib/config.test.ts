@@ -10,6 +10,8 @@ describe('game metadata contract', () => {
     expect(GAME_META.starRail.fpsLock?.value).toBe(GAME_CATALOG.starRail.lockedFps);
     expect(GAME_META.genshin.injection.features.map(({ key }) => key)).toContain('antiBlurDiveMosaic');
     expect(GAME_META.starRail.injection.features.map(({ key }) => key)).not.toContain('antiBlurDiveMosaic');
+    expect(GAME_META.genshin.injection.features.map(({ key }) => key)).not.toContain('antiBlurDof');
+    expect(GAME_META.starRail.injection.features.map(({ key }) => key)).toContain('antiBlurDof');
   });
 });
 

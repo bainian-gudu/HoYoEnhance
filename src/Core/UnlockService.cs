@@ -162,7 +162,8 @@ internal sealed partial class UnlockService : IDisposable
         var fpsNeedsInject = profile.Enabled && !descriptor.FpsViaRegistry;
         var features = profile.AntiBlurPerspective
                        || profile.HideUid
-                       || (descriptor.SupportsDiveMosaic && profile.AntiBlurDiveMosaic);
+                       || (descriptor.SupportsDiveMosaic && profile.AntiBlurDiveMosaic)
+                       || (descriptor.SupportsDof && profile.AntiBlurDof);
         return fpsNeedsInject || features;
     }
 
@@ -285,7 +286,8 @@ internal sealed partial class UnlockService : IDisposable
         _ipc.UpdateHostFields(fps, en != 0,
             featuresActive && profile.AntiBlurPerspective,
             featuresActive && descriptor.SupportsDiveMosaic && profile.AntiBlurDiveMosaic,
-            featuresActive && profile.HideUid);
+            featuresActive && profile.HideUid,
+            featuresActive && descriptor.SupportsDof && profile.AntiBlurDof);
         _lastPushedFps = fps;
         _lastPushedEnabled = en;
         Volatile.Write(ref _lastIpcPushTick, now);
@@ -357,6 +359,15 @@ internal sealed partial class UnlockService : IDisposable
     {
         var descriptor = GameCatalog.Get(game);
         _config.Profile(game).AntiBlurDiveMosaic = descriptor.SupportsDiveMosaic && enabled;
+        _config.TrySave(out _);
+        PushConfigToIpc(force: true);
+    }
+
+    /// <summary>反场景景深虚化注入开关（仅星铁模块提供）：保存并推送 IPC。</summary>
+    public void SetAntiBlurDof(GameId game, bool enabled)
+    {
+        var descriptor = GameCatalog.Get(game);
+        _config.Profile(game).AntiBlurDof = descriptor.SupportsDof && enabled;
         _config.TrySave(out _);
         PushConfigToIpc(force: true);
     }

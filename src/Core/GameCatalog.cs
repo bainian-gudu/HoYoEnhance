@@ -55,8 +55,11 @@ internal sealed class GameDescriptor
     /// <summary>该游戏的注入模块是否提供「移除水下马赛克」。</summary>
     public bool SupportsDiveMosaic { get; init; }
 
+    /// <summary>该游戏的注入模块是否提供「反场景景深虚化」（星铁专用）。</summary>
+    public bool SupportsDof { get; init; }
+
     /// <summary>注入模块提供的画面效果条数（托盘提示用）。</summary>
-    public int FeatureCount => SupportsDiveMosaic ? 3 : 2;
+    public int FeatureCount => 1 + (SupportsDiveMosaic ? 1 : 0) + (SupportsDof ? 1 : 0) + 1;
 }
 
 /// <summary>受支持游戏的静态目录（唯一事实来源）。</summary>
@@ -83,6 +86,7 @@ internal static class GameCatalog
         FpsViaRegistry = GameDefinitions.Genshin.FpsViaRegistry,
         LockedFps = GameDefinitions.Genshin.LockedFps,
         SupportsDiveMosaic = GameDefinitions.Genshin.SupportsDiveMosaic,
+        SupportsDof = GameDefinitions.Genshin.SupportsDof,
     };
 
     /// <summary>崩坏：星穹铁道：帧率写注册表（只支持 120），画面效果走 StarRailStub.dll。</summary>
@@ -103,6 +107,7 @@ internal static class GameCatalog
         FpsViaRegistry = GameDefinitions.StarRail.FpsViaRegistry,
         LockedFps = GameDefinitions.StarRail.LockedFps,
         SupportsDiveMosaic = GameDefinitions.StarRail.SupportsDiveMosaic,
+        SupportsDof = GameDefinitions.StarRail.SupportsDof,
     };
 
     /// <summary>全部游戏，顺序即界面与日志里的默认顺序。</summary>

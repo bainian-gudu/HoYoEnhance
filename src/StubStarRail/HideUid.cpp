@@ -1,61 +1,317 @@
 // =============================================================================
 // 星穹铁道隐藏 UID 水印实现。
 //
-// 主线程入口：RPG.Client.RPGApplication.OnUpdate RVA 0x1802FBF0（dump.cs 实测）。
-// 该入口每帧执行，符合 Unity 对象接口必须在主线程调用的约束。
+// 主线程入口：Hook RPG.Client.RPGApplication.OnUpdate（动态特征码唯一命中），
+// 只用来做关闭时的还原与状态上报。
 //
-// 隐藏对象：两条路径对应的 UnityEngine.UI.Graphic。
-// 修改字段：Graphic.m_Color // Offset 0x20，alpha 位于 +0x0C。
-// 不关闭 s_UICamera、不 SetActive(false)，避免把整个 HUD 一起隐藏。
+// 实际隐藏点：Hook UnityEngine.UI.Graphic.SetVerticesDirty（动态特征码 +
+// 相邻孪生函数校验）。它是 UI 颜色 / 文本变化的必经点，在这里能直接拿到
+// Graphic 实例，不必再用 GameObject.Find 走层级路径 —— 路径随版本改动是旧实现
+// 失效的直接原因。
+//
+// 判定规则（不依赖任何 UI 节点名）：
+//   a) 文本含 "UID"（忽略大小写）且带 6~12 位连续数字 → 判定为 UID 水印，
+//      同时把这串数字记为「已知 UID」；
+//   b) 文本本身就是 6~12 位纯数字，且与「已知 UID」完全一致 → 判定为 UID
+//      （覆盖只显示数字的资料页）。
+//
+// 命中后把 Graphic.m_Color.a（+0x20+0x0C）写 0，并记录原值以便关闭开关时还原。
+// 所有读写都先做可读 / 可写校验再套 SEH；还原前重新校验类名，避免 GC 回收后
+// 误写无关对象。
 // =============================================================================
 
 #include "HideUid.h"
 
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 
 #include "Il2CppBridge.h"
 #include "MinHook.h"
 
 namespace
 {
-    constexpr DWORD kTickIntervalMs = 100;
+    // UnityEngine.UI.Graphic.m_Color // Offset: 0x20（dump.cs 实测）
+    constexpr size_t kGraphicColorOffset = 0x20;
+    constexpr size_t kGraphicColorAlphaOffset = kGraphicColorOffset + 3 * sizeof(float);
+
+    // UnityEngine.UI.Text.m_Text // Offset: 0xF8（dump.cs 实测）
+    constexpr size_t kTextTextOffset = 0xF8;
+
+    // System.String::m_Length // Offset: 0x10
+    constexpr size_t kStringLengthOffset = 0x10;
+
+    // UID 文本很短；超过这个长度一定不是水印，直接跳过，避免读到长文本。
+    constexpr int32_t kMaxUidTextLength = 63;
+    constexpr int32_t kUidDigitsMin = 6;
+    constexpr int32_t kUidDigitsMax = 12;
+
+    constexpr size_t kMaxHidden = 32;
     constexpr DWORD kRestoreWaitMs = 250;
 
-    constexpr const char* kUidPaths[] = {
-        "/UIRoot/AboveDialog/BetaHintDialog(Clone)/Contents/VersionText",
-        "/UIRoot/Page/MobilePhoneMainPage(Clone)/Content/Content/LeftPlane/Tittle/UID/NumText",
-    };
-
-    struct UidTarget
+    struct HiddenEntry
     {
-        const char* path;
+        void* graphic;
         float originalAlpha;
-        bool originalCaptured;
-        bool hiddenByUs;
-    };
-
-    // 仅游戏主线程访问。
-    UidTarget g_targets[] = {
-        { kUidPaths[0], 1.0f, false, false },
-        { kUidPaths[1], 1.0f, false, false },
     };
 
     void* g_boundIpc = nullptr;
+    void* g_originalSetVerticesDirty = nullptr;
     void* g_originalOnUpdate = nullptr;
+    bool g_setVerticesDirtyReady = false;
     bool g_onUpdateReady = false;
 
-    DWORD g_lastTickMs = 0;
+    // 以下状态只在游戏主线程访问（SetVerticesDirty / OnUpdate 都在主线程）。
+    void* g_textKlass = nullptr;
+    HiddenEntry g_hidden[kMaxHidden]{};
+    size_t g_hiddenCount = 0;
+    wchar_t g_knownUid[16]{};
 
-    std::atomic_bool g_hidAnyObject{ false };
-    std::atomic_bool g_restoreRequested{ false };
-    std::atomic_bool g_faulted{ false };
+    std::atomic_bool g_hidAnyObject{false};
+    std::atomic_bool g_restoreRequested{false};
+    std::atomic_bool g_faulted{false};
 
-    using OnUpdateFn = void (*)(void* self);
+    using SetVerticesDirtyFn = void (*)(void*);
+    using OnUpdateFn = void (*)(void*);
+
+    bool IsHideEnabled()
+    {
+        IpcData* ipc = static_cast<IpcData*>(g_boundIpc);
+        return ipc && ipc->HideUid != 0;
+    }
+
+    bool IsDigit(wchar_t c)
+    {
+        return c >= L'0' && c <= L'9';
+    }
+
+    /// <summary>文本里是否出现 "UID"（忽略大小写）。</summary>
+    bool ContainsUidToken(const wchar_t* text, int32_t length)
+    {
+        for (int32_t i = 0; i + 3 <= length; ++i)
+        {
+            if ((text[i] == L'U' || text[i] == L'u') &&
+                (text[i + 1] == L'I' || text[i + 1] == L'i') &&
+                (text[i + 2] == L'D' || text[i + 2] == L'd'))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>是否与已记录的 UID 完全一致。</summary>
+    bool EqualsKnownUid(const wchar_t* text, int32_t length)
+    {
+        if (g_knownUid[0] == L'\0' || length <= 0)
+        {
+            return false;
+        }
+
+        int32_t known = 0;
+        while (known < 15 && g_knownUid[known] != L'\0')
+        {
+            ++known;
+        }
+        if (known != length)
+        {
+            return false;
+        }
+        for (int32_t i = 0; i < known; ++i)
+        {
+            if (g_knownUid[i] != text[i])
+            {
+                return false;
+            }
+        }
+        return true;
+    }
 
     /// <summary>
-    /// 主线程 tick（内部会构造 il2cpp 字符串等 C++ 对象，不能直接与 __try 同函数）。
+    /// 判定这段文本是否 UID 水印；命中时把数字串记进 g_knownUid。
+    /// 只在主线程调用。
     /// </summary>
+    bool MatchUidText(const wchar_t* text, int32_t length)
+    {
+        if (!text || length <= 0 || length > kMaxUidTextLength)
+        {
+            return false;
+        }
+
+        // 找最长的连续数字串。
+        int32_t bestStart = -1;
+        int32_t bestLength = 0;
+        for (int32_t i = 0; i < length;)
+        {
+            if (!IsDigit(text[i]))
+            {
+                ++i;
+                continue;
+            }
+            int32_t j = i;
+            while (j < length && IsDigit(text[j]))
+            {
+                ++j;
+            }
+            if (j - i > bestLength)
+            {
+                bestLength = j - i;
+                bestStart = i;
+            }
+            i = j;
+        }
+
+        if (bestLength < kUidDigitsMin || bestLength > kUidDigitsMax)
+        {
+            return false;
+        }
+
+        if (ContainsUidToken(text, length))
+        {
+            const int32_t copy = bestLength < 15 ? bestLength : 15;
+            for (int32_t k = 0; k < copy; ++k)
+            {
+                g_knownUid[k] = text[bestStart + k];
+            }
+            g_knownUid[copy] = L'\0';
+            return true;
+        }
+
+        // 整串就是纯数字，且与已知 UID 一致。
+        return bestStart == 0 && bestLength == length && EqualsKnownUid(text, length);
+    }
+
+    void RememberHidden(void* graphic, float originalAlpha)
+    {
+        for (size_t i = 0; i < g_hiddenCount; ++i)
+        {
+            if (g_hidden[i].graphic == graphic)
+            {
+                return;
+            }
+        }
+
+        if (g_hiddenCount < kMaxHidden)
+        {
+            g_hidden[g_hiddenCount].graphic = graphic;
+            g_hidden[g_hiddenCount].originalAlpha = originalAlpha;
+            ++g_hiddenCount;
+            return;
+        }
+
+        // 满了：丢掉最早的一条。UI 重建后旧对象本就可能失效，可接受。
+        for (size_t i = 1; i < kMaxHidden; ++i)
+        {
+            g_hidden[i - 1] = g_hidden[i];
+        }
+        g_hidden[kMaxHidden - 1].graphic = graphic;
+        g_hidden[kMaxHidden - 1].originalAlpha = originalAlpha;
+    }
+
+    /// <summary>
+    /// SetVerticesDirty 内的高频路径：先按缓存的 Text 类指针做一次指针比较，
+    /// 不是 Text 就直接返回，避免每次都走类名读取。
+    /// </summary>
+    void HideIfUidText(void* self)
+    {
+        if (!self)
+        {
+            return;
+        }
+
+        void* klass = nullptr;
+        if (!Il2CppBridge::ReadBytesRaw(self, &klass, sizeof(klass)) || !klass)
+        {
+            return;
+        }
+
+        if (!g_textKlass)
+        {
+            const char* name = Il2CppBridge::ObjectClassName(self);
+            if (!name || std::strcmp(name, "Text") != 0)
+            {
+                return;
+            }
+            g_textKlass = klass;
+        }
+        else if (klass != g_textKlass)
+        {
+            return;
+        }
+
+        void* text = nullptr;
+        if (!Il2CppBridge::ReadBytesRaw(
+                static_cast<uint8_t*>(self) + kTextTextOffset, &text, sizeof(text)) ||
+            !text)
+        {
+            return;
+        }
+
+        // 先读长度：长文本一律不可能是 UID 水印，直接跳过。
+        int32_t rawLength = 0;
+        if (!Il2CppBridge::ReadBytesRaw(
+                static_cast<uint8_t*>(text) + kStringLengthOffset, &rawLength, sizeof(rawLength)) ||
+            rawLength <= 0 || rawLength > kMaxUidTextLength)
+        {
+            return;
+        }
+
+        wchar_t buffer[64]{};
+        int32_t length = 0;
+        if (!Il2CppBridge::ReadString(text, buffer, 64, length))
+        {
+            return;
+        }
+        if (!MatchUidText(buffer, length))
+        {
+            return;
+        }
+
+        float alpha = 1.0f;
+        if (!Il2CppBridge::ReadFloat(
+                static_cast<uint8_t*>(self) + kGraphicColorAlphaOffset, alpha) ||
+            alpha <= 0.0f)
+        {
+            return; // 已经是透明的，不重复记录
+        }
+
+        RememberHidden(self, alpha);
+        Il2CppBridge::WriteFloat(static_cast<uint8_t*>(self) + kGraphicColorAlphaOffset, 0.0f);
+    }
+
+    void HideIfUidTextSafe(void* self)
+    {
+#if defined(_MSC_VER)
+        __try
+        {
+            HideIfUidText(self);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            // 单次读失败不终止模块：SetVerticesDirty 仍然照常转调原函数。
+        }
+#else
+        HideIfUidText(self);
+#endif
+    }
+
+    /// <summary>还原所有由本方改过的 alpha；对象失效就跳过。</summary>
+    void RestoreAll()
+    {
+        for (size_t i = 0; i < g_hiddenCount; ++i)
+        {
+            void* graphic = g_hidden[i].graphic;
+            const char* name = Il2CppBridge::ObjectClassName(graphic);
+            if (!name || std::strcmp(name, "Text") != 0)
+            {
+                continue;
+            }
+            Il2CppBridge::WriteFloat(static_cast<uint8_t*>(graphic) + kGraphicColorAlphaOffset,
+                                     g_hidden[i].originalAlpha);
+        }
+        g_hiddenCount = 0;
+    }
+
     void MainThreadTick()
     {
         IpcData* ipc = static_cast<IpcData*>(g_boundIpc);
@@ -65,87 +321,19 @@ namespace
         }
 
         const bool restore = g_restoreRequested.exchange(false, std::memory_order_relaxed);
-        const DWORD now = GetTickCount();
-        if (!restore && (now - g_lastTickMs) < kTickIntervalMs)
+        if ((restore || ipc->HideUid == 0) && g_hiddenCount > 0)
         {
-            return;
-        }
-        g_lastTickMs = now;
-
-        const bool wantHide = !restore && ipc->HideUid != 0;
-
-        // 关闭且没有任何由本方隐藏的对象时，不执行 Find，保持零开销。
-        bool anyHiddenBefore = false;
-        for (const auto& target : g_targets)
-        {
-            anyHiddenBefore = anyHiddenBefore || target.hiddenByUs;
-        }
-        if (!wantHide && !anyHiddenBefore)
-        {
-            ipc->HideUidState = static_cast<int32_t>(IpcHideUidState::Ready);
-            return;
+            RestoreAll();
         }
 
-        bool anyFoundHidden = false;
-        for (auto& target : g_targets)
-        {
-            void* graphic = Il2CppBridge::FindGraphic(target.path);
-            if (!graphic)
-            {
-                continue;
-            }
-
-            float alpha = 1.0f;
-            if (!Il2CppBridge::ReadGraphicAlpha(graphic, alpha))
-            {
-                continue;
-            }
-
-            if (wantHide)
-            {
-                // UI 重建后新对象的默认 alpha 可能比旧对象更大；保留见过的
-                // 最大非零值，关闭开关时恢复到这个值，而不是旧的中间态。
-                if (!target.originalCaptured || alpha > target.originalAlpha)
-                {
-                    // 首次隐藏前保存原值；0 视为无效，回退 1.0。
-                    target.originalAlpha = alpha > 0.0f ? alpha : 1.0f;
-                    target.originalCaptured = true;
-                }
-                if (alpha != 0.0f)
-                {
-                    if (Il2CppBridge::WriteGraphicAlpha(graphic, 0.0f))
-                    {
-                        Il2CppBridge::NotifyGraphicColorChanged(graphic);
-                    }
-                }
-                target.hiddenByUs = true;
-                anyFoundHidden = true;
-            }
-            else if (target.hiddenByUs)
-            {
-                if (Il2CppBridge::WriteGraphicAlpha(graphic, target.originalAlpha))
-                {
-                    Il2CppBridge::NotifyGraphicColorChanged(graphic);
-                }
-                target.hiddenByUs = false;
-            }
-        }
-
-        // hiddenByUs 用于退出时判断「是否还需要请求主线程恢复」；
-        // anyFoundHidden 才是本次真正生效的 Active 状态。
-        bool anyHiddenByUs = false;
-        for (const auto& target : g_targets)
-        {
-            anyHiddenByUs = anyHiddenByUs || target.hiddenByUs;
-        }
-        g_hidAnyObject.store(anyHiddenByUs, std::memory_order_relaxed);
-        ipc->HideUidState =
-            static_cast<int32_t>(IpcHideUidState::Ready) |
-            (anyFoundHidden ? static_cast<int32_t>(IpcHideUidState::Active) : 0);
+        const bool hidden = g_hiddenCount > 0;
+        g_hidAnyObject.store(hidden, std::memory_order_relaxed);
+        ipc->HideUidState = static_cast<int32_t>(IpcHideUidState::Ready) |
+                            (hidden ? static_cast<int32_t>(IpcHideUidState::Active) : 0);
     }
 
     /// <summary>
-    /// SEH 版本：一旦 tick 内出现访问违例，标记 faulted 并停止后续执行，
+    /// SEH 版本：tick 内一旦出现访问违例，标记 faulted 并停止后续执行，
     /// 由 dllmain 上报 Error 后统一卸钩。
     /// </summary>
     void MainThreadTickSafe()
@@ -176,13 +364,25 @@ namespace
         }
         MainThreadTickSafe();
     }
+
+    void HookSetVerticesDirty(void* self)
+    {
+        if (IsHideEnabled())
+        {
+            HideIfUidTextSafe(self);
+        }
+        if (g_originalSetVerticesDirty)
+        {
+            reinterpret_cast<SetVerticesDirtyFn>(g_originalSetVerticesDirty)(self);
+        }
+    }
 }
 
 namespace HideUid
 {
-    bool Initialize(IpcData* ipc, void* rpgApplicationOnUpdate)
+    bool Initialize(IpcData* ipc, void* rpgApplicationOnUpdate, void* graphicSetVerticesDirty)
     {
-        if (!ipc || !rpgApplicationOnUpdate)
+        if (!ipc || !rpgApplicationOnUpdate || !graphicSetVerticesDirty)
         {
             return false;
         }
@@ -199,9 +399,15 @@ namespace HideUid
                               reinterpret_cast<LPVOID*>(&g_originalOnUpdate)) == MH_OK;
         }
 
-        const auto& functions = Il2CppBridge::Resolved();
-        const bool ready = g_onUpdateReady && functions.gameObjectFind != nullptr &&
-                           functions.componentGetComponent != nullptr;
+        if (!g_setVerticesDirtyReady)
+        {
+            g_setVerticesDirtyReady =
+                MH_CreateHook(graphicSetVerticesDirty,
+                              reinterpret_cast<void*>(&HookSetVerticesDirty),
+                              reinterpret_cast<LPVOID*>(&g_originalSetVerticesDirty)) == MH_OK;
+        }
+
+        const bool ready = g_onUpdateReady && g_setVerticesDirtyReady;
         ipc->HideUidState = ready ? static_cast<int32_t>(IpcHideUidState::Ready) : 0;
         return ready;
     }

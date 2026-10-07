@@ -26,7 +26,7 @@ export const PAGES = ['overview', 'settings', 'logs', 'guide', 'about'] as const
 export type Page = (typeof PAGES)[number];
 
 /** 画面效果对应的配置键：每个游戏只列出自己注入模块里真实存在的那几项。 */
-export type GameFeatureKey = 'hideUid' | 'antiBlurPerspective' | 'antiBlurDiveMosaic';
+export type GameFeatureKey = 'hideUid' | 'antiBlurPerspective' | 'antiBlurDiveMosaic' | 'antiBlurDof';
 
 /** 一条画面效果。名称与说明由该游戏自己的注入模块决定，两个游戏之间不共用。 */
 export interface GameFeatureMeta {
@@ -71,13 +71,15 @@ export interface GameMeta {
 const FEATURE_META: Record<GameFeatureKey, GameFeatureMeta> = {
   antiBlurPerspective: { key: 'antiBlurPerspective', title: '反角色虚化', description: '开启后镜头拉近时，角色不再透明化（虚化效果被跳过）' },
   antiBlurDiveMosaic: { key: 'antiBlurDiveMosaic', title: '移除水下马赛克', description: '开启后角色入水时，不再显示马赛克虚化效果' },
+  antiBlurDof: { key: 'antiBlurDof', title: '反场景景深虚化', description: '开启后关闭背景景深模糊，场景保持清晰' },
   hideUid: { key: 'hideUid', title: '隐藏 UID', description: '隐藏游戏水印与资料页上的 UID 文本' },
 };
 
-function gameFeatures(supportsDiveMosaic: boolean): readonly GameFeatureMeta[] {
+function gameFeatures(supportsDiveMosaic: boolean, supportsDof: boolean): readonly GameFeatureMeta[] {
   return [
     FEATURE_META.antiBlurPerspective,
     ...(supportsDiveMosaic ? [FEATURE_META.antiBlurDiveMosaic] : []),
+    ...(supportsDof ? [FEATURE_META.antiBlurDof] : []),
     FEATURE_META.hideUid,
   ];
 }
@@ -99,7 +101,7 @@ export const GAME_META: Record<GameId, GameMeta> = {
     },
     injection: {
       module: GAME_CATALOG.genshin.stubFileName,
-      features: gameFeatures(GAME_CATALOG.genshin.supportsDiveMosaic),
+      features: gameFeatures(GAME_CATALOG.genshin.supportsDiveMosaic, GAME_CATALOG.genshin.supportsDof),
     },
   },
   starRail: {
@@ -127,7 +129,7 @@ export const GAME_META: Record<GameId, GameMeta> = {
     },
     injection: {
       module: GAME_CATALOG.starRail.stubFileName,
-      features: gameFeatures(GAME_CATALOG.starRail.supportsDiveMosaic),
+      features: gameFeatures(GAME_CATALOG.starRail.supportsDiveMosaic, GAME_CATALOG.starRail.supportsDof),
     },
   },
 };
@@ -154,6 +156,7 @@ export const DEFAULT_CONFIG: UnlockerConfig = {
       hideUid: false,
       antiBlurPerspective: false,
       antiBlurDiveMosaic: false,
+      antiBlurDof: false,
       gamePath: GAME_META.genshin.demoPath,
     },
     starRail: {
@@ -162,6 +165,7 @@ export const DEFAULT_CONFIG: UnlockerConfig = {
       hideUid: false,
       antiBlurPerspective: false,
       antiBlurDiveMosaic: false,
+      antiBlurDof: false,
       gamePath: GAME_META.starRail.demoPath,
     },
   },
@@ -215,6 +219,7 @@ export const GAME_CONFIG_LABELS: Record<keyof GameProfile, string> = {
   hideUid: '隐藏 UID',
   antiBlurPerspective: '反角色虚化',
   antiBlurDiveMosaic: '移除水下马赛克',
+  antiBlurDof: '反场景景深虚化',
   gamePath: '游戏路径',
 };
 

@@ -10,7 +10,8 @@ public sealed record GameDefinition(
     string StubFileName,
     bool FpsViaRegistry,
     int LockedFps,
-    bool SupportsDiveMosaic);
+    bool SupportsDiveMosaic,
+    bool SupportsDof);
 
 public static class GameDefinitions
 {
@@ -26,7 +27,8 @@ public static class GameDefinitions
         "FpsUnlockerStub.dll",
         FpsViaRegistry: false,
         LockedFps: 0,
-        SupportsDiveMosaic: true);
+        SupportsDiveMosaic: true,
+        SupportsDof: false);
 
     public static readonly GameDefinition StarRail = new(
         GameId.StarRail,
@@ -38,7 +40,8 @@ public static class GameDefinitions
         "StarRailStub.dll",
         FpsViaRegistry: true,
         LockedFps: 120,
-        SupportsDiveMosaic: false);
+        SupportsDiveMosaic: false,
+        SupportsDof: true);
 
     public static readonly IReadOnlyList<GameDefinition> All = [Genshin, StarRail];
 }

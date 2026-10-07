@@ -4,8 +4,9 @@
 // 职责边界（与原神 FpsUnlockerStub.dll 完全独立）：
 //   1) 反角色虚化：Hook BaseShaderPropertyTransition 的相机 Dither 入口，
 //      在开启时把 Camera 来源的透明值压回 1.0；
-//   2) 隐藏 UID 水印：Hook RPGApplication.OnUpdate 作为主线程入口，
-//      按两条层级路径把 UnityEngine.UI.Graphic.m_Color.a 写 0。
+//   2) 反场景景深虚化：Hook RPGDepthOfField.IsActiveImpl，开启时返回 false；
+//   3) 隐藏 UID 水印：Hook UnityEngine.UI.Graphic.SetVerticesDirty，按文本内容
+//      识别 UID 并把 m_Color.a 写 0；Hook RPGApplication.OnUpdate 只做还原与上报。
 //
 // 本模块不处理帧率：星铁解锁帧率由 Host 的 StarRailFpsRegistry.cs 直接写注册表。
 // 本模块不修改游戏目录、不碰存档与网络。
@@ -13,7 +14,8 @@
 // 与 Host 通过命名共享内存通信（见 src/Common/IpcData.h）。
 //
 // 健壮性约定：
-//   - 所有 RVA / 特征码定位结果必须落在 GameAssembly.dll 映像内且可执行；
+//   - 所有目标只用「动态特征码唯一命中」定位，不写死 RVA（版本一更新 RVA 必失效）；
+//     多命中目标额外做相邻结构校验，定位结果必须落在 GameAssembly.dll 映像内且可执行；
 //   - 首轮定位全部成功才置 Ready，任何一步失败置 Error + 错误码，绝不半开；
 //   - 所有 il2cpp / Unity 对象调用都在游戏主线程；worker 线程只做定位、
 //     状态监视与 Hook 生命周期管理。
@@ -37,10 +39,10 @@ namespace
 {
     // ---- 星铁专用错误码（与 Host 的 0xE001 原神错误码区分）----
     constexpr int32_t kErrGameAssemblyMissing = 0xE101;
-    constexpr int32_t kErrFindMissing = 0xE102;
-    constexpr int32_t kErrGetComponentMissing = 0xE103;
-    constexpr int32_t kErrMainThreadEntryMissing = 0xE104;
-    constexpr int32_t kErrAntiBlurEntryMissing = 0xE105;
+    constexpr int32_t kErrMainThreadEntryMissing = 0xE102;
+    constexpr int32_t kErrAntiBlurEntryMissing = 0xE103;
+    constexpr int32_t kErrDofEntryMissing = 0xE104;
+    constexpr int32_t kErrGraphicEntryMissing = 0xE105;
     constexpr int32_t kErrAntiBlurHook = 0xE106;
     constexpr int32_t kErrHideUidHook = 0xE107;
     constexpr int32_t kErrEnableHooks = 0xE108;
@@ -63,14 +65,14 @@ namespace
         {
         case Il2CppBridge::ResolveStatus::GameAssemblyMissing:
             return kErrGameAssemblyMissing;
-        case Il2CppBridge::ResolveStatus::FindMissing:
-            return kErrFindMissing;
-        case Il2CppBridge::ResolveStatus::GetComponentMissing:
-            return kErrGetComponentMissing;
         case Il2CppBridge::ResolveStatus::MainThreadEntryMissing:
             return kErrMainThreadEntryMissing;
         case Il2CppBridge::ResolveStatus::DitherEntryMissing:
             return kErrAntiBlurEntryMissing;
+        case Il2CppBridge::ResolveStatus::DofEntryMissing:
+            return kErrDofEntryMissing;
+        case Il2CppBridge::ResolveStatus::GraphicEntryMissing:
+            return kErrGraphicEntryMissing;
         default:
             return kErrGameAssemblyMissing;
         }
@@ -91,7 +93,7 @@ namespace
         g_mapHandle = OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, kIpcMappingName);
         if (!g_mapHandle)
         {
-            g_mapHandle = OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, L"GenshinFpsUnlocker.Shared.v3");
+            g_mapHandle = OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, kIpcMappingNameLocal);
         }
         if (!g_mapHandle)
         {
@@ -192,14 +194,16 @@ namespace
         // 但实际只生效一半」。
         if (!AntiBlur::Initialize(g_ipc, functions.ditherSetAlphaValue,
                                   functions.ditherSetDistanceAlpha,
-                                  functions.ditherSetElevationAlpha))
+                                  functions.ditherSetElevationAlpha,
+                                  functions.dofIsActiveImpl))
         {
             g_ipc->Status = IpcStatus::Error;
             g_ipc->LastError = kErrAntiBlurHook;
             return 3;
         }
 
-        if (!HideUid::Initialize(g_ipc, functions.rpgApplicationOnUpdate))
+        if (!HideUid::Initialize(g_ipc, functions.rpgApplicationOnUpdate,
+                                 functions.graphicSetVerticesDirty))
         {
             g_ipc->Status = IpcStatus::Error;
             g_ipc->LastError = kErrHideUidHook;

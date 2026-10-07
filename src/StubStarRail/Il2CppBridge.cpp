@@ -1,135 +1,106 @@
 // =============================================================================
-// StarRailStub 专用的 il2cpp 定位与调用实现。
+// StarRailStub 专用的 il2cpp 定位与内存访问实现。
 //
-// 定位优先级：
-//   1) dump.cs 实测 RVA（国服 4.5.0，GameAssembly.dll ImageBase 0x180000000）；
-//   2) 特征码唯一命中兜底（只对 GameObject.Find / GameObject.GetComponent 有
-//      可用特征码；多命中直接判失败，避免调用到无关函数）。
+// 定位策略：**只认特征码，不认 RVA**。每个目标一条长结构特征码，通配符只打在
+// 版本间必然变化的字节上（rip 相对位移、rel32 调用目标、立即数），其余字节都是
+// 结构常量（函数头、静态字段判空、字段偏移访问、跳转条件）。这样版本更新后特征
+// 仍然命中，而写死的 RVA 一定失效。
 //
-// 所有 il2cpp / Unity 对象调用都必须发生在游戏主线程；本文件只提供
-// 「主线程内可用」的封装，不在 worker 线程直接调用。
+// 安全边界：
+//   - 必需目标要求「全模块唯一命中」，多命中一律判失败 —— 宁可让宿主提示未适配，
+//     也不把无关函数当成目标（参考实现的多候选硬试会调用到 AssetBundle.LoadFromFile
+//     / ImageConversion.LoadImage 这类函数，有崩游戏的风险）；
+//   - 少数特征码天然多命中的目标（Graphic.SetVerticesDirty）用「相邻结构」二次校验，
+//     不按「第几个命中」挑选；
+//   - 所有定位只做只读扫描，不调用任何 il2cpp / Unity 接口，可在工作线程执行。
+//
+// 各特征码的字节来源、命中数与候选身份见同目录 SIGNATURES.md。
 // =============================================================================
 
 #include "Il2CppBridge.h"
 
 #include <Psapi.h>
 
-#include <cstddef>
 #include <cstring>
-#include <new>
 
-#include "PatternMatch.h"
 #include "Scanner.h"
 
 #pragma comment(lib, "Psapi.lib")
 
 namespace
 {
-    // ---- 国服 4.5.0 dump.cs 实测 RVA（ImageBase 0x180000000）----
-    constexpr uintptr_t kRvaGameObjectFind = 0x1DEDE300;
-    constexpr uintptr_t kRvaComponentGetComponent = 0x1DEDDE30;
-    constexpr uintptr_t kRvaRpgApplicationOnUpdate = 0x1802FBF0;
-    constexpr uintptr_t kRvaDitherSetAlphaValue = 0x19F1BE00;
-    constexpr uintptr_t kRvaDitherSetDistanceAlpha = 0x19F1C0E0;
-    constexpr uintptr_t kRvaDitherSetElevationAlpha = 0x19F1BD70;
-    constexpr uintptr_t kRvaGraphicSetVerticesDirty = 0x1B78C0C0;
+    // ---- 特征码 -----------------------------------------------------------
+    // 通配符只覆盖版本间会变的位移；其余字节是跨版本稳定的结构常量。
 
-    // ---- 参考实现（30launchers）的特征码：4.5.0 上 Find 命中 9 处、
-    //      GetComponent 命中 8 处。这里只用于 RVA 失效后的「唯一命中」兜底。----
-    constexpr const char* kGameObjectFindPattern =
-        "48 FF ?? ?? ?? ?? ?? 66 0F 1F 84 00 00 00 00 00 48 83 EC 28 C7 44 24 20";
-    constexpr const char* kGetComponentPattern =
-        "48 8B 05 ?? ?? ?? ?? 48 FF E0 66 0F 1F 44 00 00 48 8B 05 ?? ?? ?? ?? 45 31 C0 48 FF E0 0F 1F 00";
+    // RPG.Client.RPGApplication.OnUpdate
+    //   4.5.0  RVA 0x1802FBF0
+    //   2026-09-28 RVA 0x0DE0AD30
+    // 两个版本都唯一命中。类内字段偏移（0x18 / 0xC7 之类）会随版本变，所以
+    // `cmp byte [rsi+off], 0` / `cmp byte [rcx+off], 0` 的 off 字节留通配。
+    constexpr const char* kRpgApplicationOnUpdatePattern =
+        "56 57 48 83 EC 48 0F 29 7C 24 30 0F 29 74 24 20 48 89 CE 80 3D ?? ?? ?? ?? 00 "
+        "0F 85 ?? ?? ?? ?? 80 7E ?? 00 0F 84 ?? ?? ?? ?? 48 8B 0D ?? ?? ?? ?? "
+        "80 B9 ?? 00 00 00 00 0F 84 ?? ?? ?? ??";
 
-    // 无特征码目标的函数头校验（4.5.0 实测字节）。
-    // 版本更新后即使 RVA 仍落在模块内，也不允许它指向一个形态不对的函数。
-    constexpr const char* kRpgApplicationOnUpdateHead = "56 57 48 83 EC 48 0F 29 7C 24 30";
-    constexpr const char* kDitherSetAlphaValueHead =
+    // BaseShaderPropertyTransition 私有相机 Dither 汇合入口（4.5.0 RVA 0x19F1BE00，唯一命中）
+    constexpr const char* kDitherMergePattern =
         "41 56 56 57 55 53 48 83 EC 50 0F 29 7C 24 40 0F 29 74 24 30 44 89 CD 44 89 C7 "
-        "0F 28 F9 48 89 CE 80 3D";
-    constexpr const char* kDitherSetDistanceAlphaHead =
-        "56 53 48 83 EC 38 0F 29 74 24 20 44 89 C3 0F 28 F1 48 89 CE 80 3D";
-    constexpr const char* kDitherSetElevationAlphaHead =
-        "56 48 83 EC 30 0F 29 74 24 20 0F 28 F1 48 89 CE 80 3D";
-    constexpr const char* kGraphicSetVerticesDirtyHead = "56 48 83 EC 20 48 89 CE FF 15";
+        "0F 28 F9 48 89 CE 80 3D ?? ?? ?? ?? 00 0F 85 ?? ?? ?? ?? "
+        "80 3D ?? ?? ?? ?? 00 0F 85 ?? ?? ?? ??";
 
-    // UnityEngine.UI.Graphic.m_Color // Offset: 0x20（dump.cs 实测）
-    // Color 是 4 个 float：r/g/b/a，alpha 位于 +0x0C。
-    constexpr size_t kGraphicColorOffset = 0x20;
-    constexpr size_t kGraphicColorAlphaOffset = kGraphicColorOffset + 3 * sizeof(float);
+    // BaseShaderPropertyTransition.SetDistanceDitherAlphaValue（4.5.0 RVA 0x19F1C0E0，唯一命中）
+    // 结构锚点：先写 +0x30（DistanceDitherAlpha）再读 +0x2C（ElevationDitherAlpha）。
+    constexpr const char* kDitherSetDistancePattern =
+        "56 53 48 83 EC 38 0F 29 74 24 20 44 89 C3 0F 28 F1 48 89 CE 80 3D ?? ?? ?? ?? 00 "
+        "75 ?? 80 7E 36 00 74 ?? 0F 57 C0 F3 0F 5F C6 F3 0F 10 0D ?? ?? ?? ?? "
+        "F3 0F 5D C8 F3 0F 11 4E 30 F3 0F 59 4E 2C";
 
-    using FindFn = void* (*)(void*);
-    using GetComponentFn = void* (*)(void*, void*);
-    using SetVerticesDirtyFn = void (*)(void*);
+    // BaseShaderPropertyTransition.SetElevationDitherAlphaValue（4.5.0 RVA 0x19F1BD70，唯一命中）
+    // 结构锚点：先写 +0x2C（ElevationDitherAlpha）再读 +0x30（DistanceDitherAlpha）。
+    constexpr const char* kDitherSetElevationPattern =
+        "56 48 83 EC 30 0F 29 74 24 20 0F 28 F1 48 89 CE 80 3D ?? ?? ?? ?? 00 "
+        "75 ?? 80 7E 36 00 74 ?? 0F 57 C0 F3 0F 5F C6 F3 0F 10 0D ?? ?? ?? ?? "
+        "F3 0F 5D C8 F3 0F 11 4E 2C F3 0F 59 4E 30";
+
+    // RPG.CustomRP.RPGDepthOfField.IsActiveImpl
+    //   4.5.0  RVA 0x1858CCF0
+    //   2026-09-28 RVA 0x1CC15630
+    // 两个版本都唯一命中。字段偏移（0xB7 / 0x2A70 / 0x10）随版本变，留通配；
+    // 尾部的 `... C4 28 C3 31 C0 ... C4 28 C3` 是返回分支结构，用来拉开区分度。
+    constexpr const char* kDofIsActivePattern =
+        "48 83 EC 28 80 79 18 00 74 ?? 48 8B 0D ?? ?? ?? ?? 80 B9 ?? 00 00 00 00 74 ?? "
+        "48 8B 05 ?? ?? ?? ?? 48 8B 80 ?? ?? 00 00 48 85 C0 74 ?? 80 78 ?? 00 0F 95 C0 "
+        "48 83 C4 28 C3 31 C0 48 83 C4 28 C3";
+
+    // UnityEngine.UI.Graphic.SetVerticesDirty（4.5.0 RVA 0x1B78C0C0，命中 2 处）
+    // 另一处命中是 SRDebugger 的 ConsoleLogControl.Update，两者字节几乎一致，
+    // 因此不能只看这一条 —— 必须配合下面的「相邻结构」二次校验。
+    constexpr const char* kGraphicSetVerticesDirtyPattern =
+        "56 48 83 EC 20 48 89 CE FF 15 ?? ?? ?? ?? 84 C0 74 ?? "
+        "C6 86 99 00 00 00 01 EB ?? 48 89 F1 FF 15 ?? ?? ?? ?? 84 C0 74 ?? "
+        "C6 46 58 01 48 89 F1 E8 ?? ?? ?? ?? 48 8B 46 68 48 85 C0 74 ?? "
+        "4C 8B 40 18 48 8B 50 28 48 8B 48 40 48 83 C4 20 5E 49 FF E0 90";
+
+    // 紧跟在 Graphic.SetVerticesDirty 之后的 Graphic.SetLayoutDirty：结构完全相同，
+    // 只是两个字段偏移各 +1（0x99→0x9A、0x58→0x59）。这一对「孪生函数」是
+    // Graphic.SetVerticesDirty 独有的相邻结构，ConsoleLogControl.Update 后面没有。
+    constexpr const char* kGraphicSetLayoutDirtyTwinPattern =
+        "56 48 83 EC 20 48 89 CE FF 15 ?? ?? ?? ?? 84 C0 74 09 "
+        "C6 86 9A 00 00 00 01";
+
+    /// 孪生函数的搜索窗口：4.5.0 实测距离 0x60，留一倍余量。
+    constexpr uintptr_t kGraphicTwinWindow = 0x80;
+
+    // ---- IL2CPP 对象布局（跨版本长期稳定）--------------------------------
+    constexpr size_t kIl2CppClassOffset = 0x00;       // Il2CppObject::klass
+    constexpr size_t kIl2CppClassNameOffset = 0x10;   // Il2CppClass::name
+    constexpr size_t kStringLengthOffset = 0x10;      // System.String::m_Length
+    constexpr size_t kStringCharsOffset = 0x14;       // System.String::m_Chars
 
     Il2CppBridge::Functions g_functions{};
 
-    /// <summary>
-    /// 自建 il2cpp string。
-    ///
-    /// 星铁没有可用的 il2cpp_string_new 导出，参考实现同样是自建 length + chars。
-    /// 这里只保证 GameObject.Find / GetComponent 读取期间有效，调用后立刻释放；
-    /// 不把它交给会长期持有引用的游戏代码。
-    /// </summary>
-    struct Il2CppString
-    {
-        void* klass;
-        void* monitor;
-        int32_t length;
-        wchar_t chars[1];
-    };
-
-    class ScopedIl2CppString
-    {
-    public:
-        explicit ScopedIl2CppString(const char* utf8)
-        {
-            if (!utf8 || *utf8 == '\0')
-            {
-                return;
-            }
-
-            const int wideLength = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, nullptr, 0);
-            if (wideLength <= 1)
-            {
-                return;
-            }
-
-            // 多留一个 wchar_t 给结尾 NUL：IL2CPP 的 length 不含 NUL，
-            // 但底层字符串缓冲区按惯例以 NUL 结尾，避免转换时越界写入。
-            const size_t bytes = offsetof(Il2CppString, chars) +
-                                 static_cast<size_t>(wideLength) * sizeof(wchar_t);
-            auto* value = static_cast<Il2CppString*>(::operator new[](bytes, std::nothrow));
-            if (!value)
-            {
-                return;
-            }
-
-            std::memset(value, 0, bytes);
-            value->klass = nullptr;
-            value->monitor = nullptr;
-            value->length = wideLength - 1;
-            MultiByteToWideChar(CP_UTF8, 0, utf8, -1, value->chars, wideLength);
-            _value = value;
-        }
-
-        ~ScopedIl2CppString()
-        {
-            ::operator delete[](_value);
-        }
-
-        ScopedIl2CppString(const ScopedIl2CppString&) = delete;
-        ScopedIl2CppString& operator=(const ScopedIl2CppString&) = delete;
-
-        bool Valid() const { return _value != nullptr; }
-        void* Get() const { return _value; }
-
-    private:
-        Il2CppString* _value = nullptr;
-    };
-
-    /// <summary>地址是否落在模块映像内且可执行。</summary>
-    bool IsExecutableInModule(HMODULE module, const void* address)
+    /// <summary>地址是否落在模块映像内。</summary>
+    bool IsInModule(HMODULE module, const void* address, size_t size)
     {
         if (!module || !address)
         {
@@ -143,8 +114,15 @@ namespace
         }
 
         const uintptr_t base = reinterpret_cast<uintptr_t>(mi.lpBaseOfDll);
+        const uintptr_t end = base + mi.SizeOfImage;
         const uintptr_t addr = reinterpret_cast<uintptr_t>(address);
-        if (addr < base || addr >= base + mi.SizeOfImage)
+        return addr >= base && size <= end - addr;
+    }
+
+    /// <summary>地址是否可读（已提交、非 GUARD、含读权限）。</summary>
+    bool IsReadable(const void* address, size_t size)
+    {
+        if (!address || size == 0)
         {
             return false;
         }
@@ -158,104 +136,108 @@ namespace
         {
             return false;
         }
-        return (mbi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
-                               PAGE_EXECUTE_WRITECOPY)) != 0;
-    }
-
-    /// <summary>按 RVA 取函数地址；不在模块内或不可执行返回 nullptr。</summary>
-    void* ResolveRva(HMODULE module, uintptr_t rva)
-    {
-        auto* address = reinterpret_cast<uint8_t*>(module) + rva;
-        return IsExecutableInModule(module, address) ? address : nullptr;
-    }
-
-    /// <summary>地址处是否匹配给定特征码（读取前先确认整个模式在同一内存区域内）。</summary>
-    bool MatchesPatternAt(void* address, const char* pattern)
-    {
-        if (!address || !pattern)
+        const DWORD readable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
+                               PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+        if ((mbi.Protect & readable) == 0)
         {
             return false;
         }
+        const uintptr_t start = reinterpret_cast<uintptr_t>(address);
+        const uintptr_t regionEnd = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
+        return size <= regionEnd - start;
+    }
 
-        const auto parsed = Scanner::ParsePattern(pattern);
-        if (parsed.empty())
+    /// <summary>地址是否可写。</summary>
+    bool IsWritable(const void* address, size_t size)
+    {
+        if (!IsReadable(address, size))
         {
             return false;
         }
-        const auto compiled = Scanner::PatternMatch::Compile(parsed);
 
         MEMORY_BASIC_INFORMATION mbi{};
         if (!VirtualQuery(address, &mbi, sizeof(mbi)))
         {
             return false;
         }
-        const uintptr_t start = reinterpret_cast<uintptr_t>(address);
-        const uintptr_t regionEnd = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
-        if (mbi.State != MEM_COMMIT || (mbi.Protect & PAGE_GUARD) != 0 ||
-            start + compiled.size() > regionEnd)
+        return (mbi.Protect & (PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READWRITE |
+                               PAGE_EXECUTE_WRITECOPY)) != 0;
+    }
+
+    /// <summary>地址是否可执行（用于确认定位结果真的是函数入口）。</summary>
+    bool IsExecutable(const void* address, size_t size)
+    {
+        if (!IsReadable(address, size))
         {
             return false;
         }
-        return Scanner::PatternMatch::MatchAt(static_cast<const uint8_t*>(address), compiled);
-    }
 
-    /// <summary>RVA 命中且函数头匹配时才返回地址。</summary>
-    void* ResolveRvaWithPattern(HMODULE module, uintptr_t rva, const char* pattern)
-    {
-        void* address = ResolveRva(module, rva);
-        return MatchesPatternAt(address, pattern) ? address : nullptr;
-    }
-
-    /// <summary>特征码唯一命中才返回地址；0 处或多处都返回 nullptr。</summary>
-    void* ResolveUniquePattern(HMODULE module, const char* pattern)
-    {
-        const auto hits = Scanner::ScanModuleAll(module, pattern);
-        return hits.size() == 1 ? hits.front() : nullptr;
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (!VirtualQuery(address, &mbi, sizeof(mbi)))
+        {
+            return false;
+        }
+        return (mbi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
+                               PAGE_EXECUTE_WRITECOPY)) != 0;
     }
 
     /// <summary>
-    /// 带 SEH 的 GameObject.Find 调用。
-    /// 该函数内不能出现需要析构的 C++ 对象（MSVC C2712），字符串构造放在调用方。
+    /// 唯一的必需目标：特征码必须全模块唯一命中，且结果落在模块内且可执行。
     /// </summary>
-    void* CallFindRaw(void* str)
+    void* ResolveUnique(HMODULE module, const char* pattern)
     {
-        if (!g_functions.gameObjectFind)
+        const auto hits = Scanner::ScanModuleAll(module, pattern);
+        if (hits.size() != 1)
         {
             return nullptr;
         }
-#if defined(_MSC_VER)
-        __try
-        {
-            return reinterpret_cast<FindFn>(g_functions.gameObjectFind)(str);
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER)
-        {
-            return nullptr;
-        }
-#else
-        return reinterpret_cast<FindFn>(g_functions.gameObjectFind)(str);
-#endif
+        return IsInModule(module, hits.front(), 1) && IsExecutable(hits.front(), 1)
+                   ? hits.front()
+                   : nullptr;
     }
 
-    /// <summary>带 SEH 的 GameObject.GetComponent(string) 调用。</summary>
-    void* CallGetComponentRaw(void* gameObject, void* typeName)
+    /// <summary>
+    /// 多命中目标：候选后面 kGraphicTwinWindow 字节内必须出现「孪生函数」特征。
+    /// 仍然要求唯一 —— 只有恰好一个候选满足时才接受。
+    /// </summary>
+    void* ResolveByAdjacentTwin(HMODULE module, const char* pattern, const char* twinPattern)
     {
-        if (!g_functions.componentGetComponent)
+        const auto candidates = Scanner::ScanModuleAll(module, pattern);
+        if (candidates.empty())
         {
             return nullptr;
         }
-#if defined(_MSC_VER)
-        __try
-        {
-            return reinterpret_cast<GetComponentFn>(g_functions.componentGetComponent)(gameObject, typeName);
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER)
+        const auto twins = Scanner::ScanModuleAll(module, twinPattern);
+        if (twins.empty())
         {
             return nullptr;
         }
-#else
-        return reinterpret_cast<GetComponentFn>(g_functions.componentGetComponent)(gameObject, typeName);
-#endif
+
+        void* match = nullptr;
+        for (void* candidate : candidates)
+        {
+            if (!IsInModule(module, candidate, 1) || !IsExecutable(candidate, 1))
+            {
+                continue;
+            }
+
+            const uintptr_t start = reinterpret_cast<uintptr_t>(candidate);
+            for (void* twin : twins)
+            {
+                const uintptr_t addr = reinterpret_cast<uintptr_t>(twin);
+                if (addr <= start || addr - start > kGraphicTwinWindow)
+                {
+                    continue;
+                }
+                if (match)
+                {
+                    return nullptr; // 多于一个候选满足 → 宁可失败
+                }
+                match = candidate;
+                break;
+            }
+        }
+        return match;
     }
 }
 
@@ -269,96 +251,55 @@ namespace Il2CppBridge
             return ResolveStatus::GameAssemblyMissing;
         }
 
-        // GameObject.Find：RVA 优先，特征码唯一命中兜底。
-        out.gameObjectFind = ResolveRvaWithPattern(gameAssembly, kRvaGameObjectFind, kGameObjectFindPattern);
-        if (!out.gameObjectFind)
-        {
-            out.gameObjectFind = ResolveUniquePattern(gameAssembly, kGameObjectFindPattern);
-        }
-        if (!out.gameObjectFind)
-        {
-            return ResolveStatus::FindMissing;
-        }
-
-        // GameObject.GetComponent(string)：同上（传入的是 GameObject.Find 的返回值）。
-        out.componentGetComponent =
-            ResolveRvaWithPattern(gameAssembly, kRvaComponentGetComponent, kGetComponentPattern);
-        if (!out.componentGetComponent)
-        {
-            out.componentGetComponent = ResolveUniquePattern(gameAssembly, kGetComponentPattern);
-        }
-        if (!out.componentGetComponent)
-        {
-            return ResolveStatus::GetComponentMissing;
-        }
-
-        // RPGApplication.OnUpdate：UID 隐藏唯一安全的主线程入口，无特征码兜底。
-        out.rpgApplicationOnUpdate =
-            ResolveRvaWithPattern(gameAssembly, kRvaRpgApplicationOnUpdate, kRpgApplicationOnUpdateHead);
+        // RPGApplication.OnUpdate：UID 隐藏唯一安全的主线程入口。
+        out.rpgApplicationOnUpdate = ResolveUnique(gameAssembly, kRpgApplicationOnUpdatePattern);
         if (!out.rpgApplicationOnUpdate)
         {
             return ResolveStatus::MainThreadEntryMissing;
         }
 
-        // 角色相机 Dither：优先挂私有汇合入口，公开的距离/高度入口作为版本兜底。
-        out.ditherSetAlphaValue =
-            ResolveRvaWithPattern(gameAssembly, kRvaDitherSetAlphaValue, kDitherSetAlphaValueHead);
-        out.ditherSetDistanceAlpha = ResolveRvaWithPattern(
-            gameAssembly, kRvaDitherSetDistanceAlpha, kDitherSetDistanceAlphaHead);
-        out.ditherSetElevationAlpha = ResolveRvaWithPattern(
-            gameAssembly, kRvaDitherSetElevationAlpha, kDitherSetElevationAlphaHead);
+        // 角色相机 Dither：优先私有汇合入口，公开的距离 / 高度入口作为兜底。
+        out.ditherSetAlphaValue = ResolveUnique(gameAssembly, kDitherMergePattern);
+        if (!out.ditherSetAlphaValue)
+        {
+            out.ditherSetDistanceAlpha = ResolveUnique(gameAssembly, kDitherSetDistancePattern);
+            out.ditherSetElevationAlpha = ResolveUnique(gameAssembly, kDitherSetElevationPattern);
+        }
         if (!out.ditherSetAlphaValue && !out.ditherSetDistanceAlpha && !out.ditherSetElevationAlpha)
         {
             return ResolveStatus::DitherEntryMissing;
         }
 
-        // UI 重建通知：可选辅助路径，定位失败只降级为「直接写 m_Color」，
-        // 不让整个模块因此 Error。
+        // 场景景深（第二项反虚化）：IsActiveImpl 是 DOF 总开关，唯一命中。
+        out.dofIsActiveImpl = ResolveUnique(gameAssembly, kDofIsActivePattern);
+        if (!out.dofIsActiveImpl)
+        {
+            return ResolveStatus::DofEntryMissing;
+        }
+
+        // UI 重建通知：UID 隐藏的主路径。多命中，用相邻孪生函数二次校验。
         out.graphicSetVerticesDirty =
-            ResolveRvaWithPattern(gameAssembly, kRvaGraphicSetVerticesDirty, kGraphicSetVerticesDirtyHead);
+            ResolveByAdjacentTwin(gameAssembly, kGraphicSetVerticesDirtyPattern,
+                                  kGraphicSetLayoutDirtyTwinPattern);
+        if (!out.graphicSetVerticesDirty)
+        {
+            return ResolveStatus::GraphicEntryMissing;
+        }
 
         g_functions = out;
         return ResolveStatus::Ok;
     }
 
-    void* FindGraphic(const char* path)
+    bool ReadBytes(const void* address, void* out, size_t size)
     {
-        if (!path || !g_functions.gameObjectFind || !g_functions.componentGetComponent)
-        {
-            return nullptr;
-        }
-
-        ScopedIl2CppString pathString(path);
-        if (!pathString.Valid())
-        {
-            return nullptr;
-        }
-
-        void* gameObject = CallFindRaw(pathString.Get());
-        if (!gameObject)
-        {
-            return nullptr;
-        }
-
-        ScopedIl2CppString typeName("UnityEngine.UI.Graphic");
-        if (!typeName.Valid())
-        {
-            return nullptr;
-        }
-        return CallGetComponentRaw(gameObject, typeName.Get());
-    }
-
-    bool ReadGraphicAlpha(void* graphic, float& alpha)
-    {
-        if (!graphic)
+        if (!out || size == 0 || !IsReadable(address, size))
         {
             return false;
         }
 #if defined(_MSC_VER)
         __try
         {
-            alpha = *reinterpret_cast<const float*>(
-                reinterpret_cast<const uint8_t*>(graphic) + kGraphicColorAlphaOffset);
+            std::memcpy(out, address, size);
             return true;
         }
         __except (EXCEPTION_EXECUTE_HANDLER)
@@ -366,23 +307,26 @@ namespace Il2CppBridge
             return false;
         }
 #else
-        alpha = *reinterpret_cast<const float*>(
-            reinterpret_cast<const uint8_t*>(graphic) + kGraphicColorAlphaOffset);
+        std::memcpy(out, address, size);
         return true;
 #endif
     }
 
-    bool WriteGraphicAlpha(void* graphic, float alpha)
+    bool ReadFloat(const void* address, float& value)
     {
-        if (!graphic)
+        return ReadBytes(address, &value, sizeof(value));
+    }
+
+    bool ReadBytesRaw(const void* address, void* out, size_t size)
+    {
+        if (!address || !out || size == 0)
         {
             return false;
         }
 #if defined(_MSC_VER)
         __try
         {
-            *reinterpret_cast<float*>(
-                reinterpret_cast<uint8_t*>(graphic) + kGraphicColorAlphaOffset) = alpha;
+            std::memcpy(out, address, size);
             return true;
         }
         __except (EXCEPTION_EXECUTE_HANDLER)
@@ -390,30 +334,89 @@ namespace Il2CppBridge
             return false;
         }
 #else
-        *reinterpret_cast<float*>(
-            reinterpret_cast<uint8_t*>(graphic) + kGraphicColorAlphaOffset) = alpha;
+        std::memcpy(out, address, size);
         return true;
 #endif
     }
 
-    void NotifyGraphicColorChanged(void* graphic)
+    bool WriteFloat(void* address, float value)
     {
-        if (!graphic || !g_functions.graphicSetVerticesDirty)
+        if (!IsWritable(address, sizeof(value)))
         {
-            return;
+            return false;
         }
 #if defined(_MSC_VER)
         __try
         {
-            reinterpret_cast<SetVerticesDirtyFn>(g_functions.graphicSetVerticesDirty)(graphic);
+            *static_cast<float*>(address) = value;
+            return true;
         }
         __except (EXCEPTION_EXECUTE_HANDLER)
         {
-            // 辅助路径失败不影响隐藏本身；下一次 tick 仍会重试。
+            return false;
         }
 #else
-        reinterpret_cast<SetVerticesDirtyFn>(g_functions.graphicSetVerticesDirty)(graphic);
+        *static_cast<float*>(address) = value;
+        return true;
 #endif
+    }
+
+    const char* ObjectClassName(const void* object)
+    {
+        if (!object)
+        {
+            return nullptr;
+        }
+
+        void* klass = nullptr;
+        if (!ReadBytes(static_cast<const uint8_t*>(object) + kIl2CppClassOffset, &klass,
+                       sizeof(klass)) ||
+            !klass)
+        {
+            return nullptr;
+        }
+
+        const char* name = nullptr;
+        if (!ReadBytes(static_cast<const uint8_t*>(klass) + kIl2CppClassNameOffset, &name,
+                       sizeof(name)) ||
+            !name || !IsReadable(name, 1))
+        {
+            return nullptr;
+        }
+        return name;
+    }
+
+    bool ReadString(const void* stringObject, wchar_t* out, size_t capacity, int32_t& length)
+    {
+        length = 0;
+        if (!stringObject || !out || capacity == 0)
+        {
+            return false;
+        }
+
+        int32_t rawLength = 0;
+        if (!ReadBytes(static_cast<const uint8_t*>(stringObject) + kStringLengthOffset, &rawLength,
+                       sizeof(rawLength)) ||
+            rawLength < 0)
+        {
+            return false;
+        }
+
+        // 长度字段是攻击面（对象可能已被 GC 回收）：上限先按容量夹一次。
+        const int32_t copyLength = rawLength < static_cast<int32_t>(capacity)
+                                       ? rawLength
+                                       : static_cast<int32_t>(capacity) - 1;
+        if (copyLength > 0)
+        {
+            if (!ReadBytes(static_cast<const uint8_t*>(stringObject) + kStringCharsOffset, out,
+                           static_cast<size_t>(copyLength) * sizeof(wchar_t)))
+            {
+                return false;
+            }
+        }
+        out[copyLength] = L'\0';
+        length = copyLength;
+        return true;
     }
 
     const Functions& Resolved()

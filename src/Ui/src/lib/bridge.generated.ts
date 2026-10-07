@@ -10,6 +10,7 @@ export interface GameProfile {
   enabled: boolean;
   antiBlurPerspective: boolean;
   antiBlurDiveMosaic: boolean;
+  antiBlurDof: boolean;
   hideUid: boolean;
   gamePath: string | null;
 }
@@ -48,6 +49,7 @@ export interface GameDefinition {
   fpsViaRegistry: boolean;
   lockedFps: number;
   supportsDiveMosaic: boolean;
+  supportsDof: boolean;
 }
 
 export const GAME_CATALOG = {
@@ -62,6 +64,7 @@ export const GAME_CATALOG = {
     fpsViaRegistry: false,
     lockedFps: 0,
     supportsDiveMosaic: true,
+    supportsDof: false,
   },
   starRail: {
     id: 'starRail',
@@ -74,6 +77,7 @@ export const GAME_CATALOG = {
     fpsViaRegistry: true,
     lockedFps: 120,
     supportsDiveMosaic: false,
+    supportsDof: true,
   },
 } as const satisfies Record<GameId, GameDefinition>;
 

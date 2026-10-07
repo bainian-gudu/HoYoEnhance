@@ -97,6 +97,7 @@ internal static class ContractGenerator
         output.AppendLine("  fpsViaRegistry: boolean;");
         output.AppendLine("  lockedFps: number;");
         output.AppendLine("  supportsDiveMosaic: boolean;");
+        output.AppendLine("  supportsDof: boolean;");
         output.AppendLine("}");
         output.AppendLine();
         output.AppendLine("export const GAME_CATALOG = {");
@@ -116,6 +117,7 @@ internal static class ContractGenerator
             output.AppendLine($"    fpsViaRegistry: {game.FpsViaRegistry.ToString().ToLowerInvariant()},");
             output.AppendLine($"    lockedFps: {game.LockedFps},");
             output.AppendLine($"    supportsDiveMosaic: {game.SupportsDiveMosaic.ToString().ToLowerInvariant()},");
+            output.AppendLine($"    supportsDof: {game.SupportsDof.ToString().ToLowerInvariant()},");
             output.AppendLine("  },");
         }
         output.AppendLine("} as const satisfies Record<GameId, GameDefinition>;");

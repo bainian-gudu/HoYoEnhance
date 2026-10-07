@@ -18,6 +18,9 @@ internal sealed class GameProfile
     /// <summary>移除水下马赛克（仅原神的注入模块提供）。</summary>
     public bool AntiBlurDiveMosaic { get; set; } = false;
 
+    /// <summary>反场景景深虚化（仅星铁的注入模块提供）。</summary>
+    public bool AntiBlurDof { get; set; } = false;
+
     /// <summary>隐藏 UID（水印 / 资料页）。</summary>
     public bool HideUid { get; set; } = false;
 
@@ -31,6 +34,7 @@ internal sealed class GameProfile
         Enabled = Enabled,
         AntiBlurPerspective = AntiBlurPerspective,
         AntiBlurDiveMosaic = AntiBlurDiveMosaic,
+        AntiBlurDof = AntiBlurDof,
         HideUid = HideUid,
         GamePath = GamePath,
     };
@@ -41,6 +45,7 @@ internal sealed class GameProfile
         TargetFps = game.LockedFps > 0 ? game.LockedFps : Math.Clamp(TargetFps, 1, 540);
         // 该游戏的注入模块没有这项功能时不允许留下 true，避免下发无意义的开关。
         if (!game.SupportsDiveMosaic) AntiBlurDiveMosaic = false;
+        if (!game.SupportsDof) AntiBlurDof = false;
         if (string.IsNullOrWhiteSpace(GamePath))
         {
             GamePath = null;

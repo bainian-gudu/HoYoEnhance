@@ -147,6 +147,20 @@ internal sealed partial class MainForm
             AfterTrayConfigChange("移除水下马赛克");
         };
         menu.Items.Add(_trayAntiBlurDiveMosaicItem);
+
+        _trayAntiBlurDofItem = MakeCheckItem(
+            "反场景景深虚化",
+            ActiveGameProfile.AntiBlurDof,
+            "关闭背景景深模糊（仅供单机体验）");
+        // 只有星穹铁道的注入模块提供这一项。
+        _trayAntiBlurDofItem.Visible = ActiveGameDescriptor.SupportsDof;
+        _trayAntiBlurDofItem.CheckedChanged += (_, _) =>
+        {
+            if (_syncingUi) return;
+            _service.SetAntiBlurDof(_service.DisplayGame, _trayAntiBlurDofItem.Checked);
+            AfterTrayConfigChange("反场景景深虚化");
+        };
+        menu.Items.Add(_trayAntiBlurDofItem);
         menu.Items.Add(MakeSep());
 
         // —— 退出 ——

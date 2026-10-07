@@ -8,6 +8,7 @@ public sealed class GameProfileDto
     public bool Enabled { get; init; } = true;
     public bool AntiBlurPerspective { get; init; }
     public bool AntiBlurDiveMosaic { get; init; }
+    public bool AntiBlurDof { get; init; }
     public bool HideUid { get; init; }
     public string? GamePath { get; init; }
 }

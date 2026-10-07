@@ -1,10 +1,18 @@
 #pragma once
 
 // =============================================================================
-// StarRailStub 专用的 il2cpp 调用封装。
+// StarRailStub 专用的 il2cpp 定位与内存访问封装。
 //
 // 星铁的 GameAssembly.dll 只导出 il2cpp_get_api_table 一个符号，没有原神那套
-// il2cpp_* 导出；本模块按 dump.cs 的 RVA 定位，必要时用参考实现的特征码兜底。
+// il2cpp_* 导出，因此**不能**按名字解析函数。定位策略改为「动态特征匹配」：
+//
+//   1) 每个目标一条长结构特征码（函数头 + 结构常量 + 通配的 rip/rel32 位移）；
+//   2) 只有全模块唯一命中才接受，多命中一律降级（可选目标）或报错（必需目标）；
+//   3) 少数特征码天然多命中的目标（如 Graphic.SetVerticesDirty），再用一条
+//      「相邻结构」特征做二次校验，而不是按写死的 RVA 挑第几个命中。
+//
+// 所有 RVA 只作为注释与回归基线保留，不参与运行时决策 —— 版本一更新就失效的
+// 正是 RVA。详见同目录 SIGNATURES.md。
 //
 // 该文件只服务星穹铁道，与原神 Stub 相互独立：
 //   - 不引用 src/Stub 下的任何业务代码；
@@ -13,6 +21,7 @@
 
 #include <Windows.h>
 
+#include <cstddef>
 #include <cstdint>
 
 namespace Il2CppBridge
@@ -20,13 +29,12 @@ namespace Il2CppBridge
     /// <summary>已定位的星铁 il2cpp 目标地址。</summary>
     struct Functions
     {
-        void* gameObjectFind = nullptr;           // GameObject.Find(string)
-        void* componentGetComponent = nullptr;    // GameObject.GetComponent(string)
         void* rpgApplicationOnUpdate = nullptr;   // RPG.Client.RPGApplication.OnUpdate
         void* ditherSetAlphaValue = nullptr;      // BaseShaderPropertyTransition 私有相机 Dither 汇合入口
         void* ditherSetDistanceAlpha = nullptr;   // BaseShaderPropertyTransition.SetDistanceDitherAlphaValue
         void* ditherSetElevationAlpha = nullptr;  // BaseShaderPropertyTransition.SetElevationDitherAlphaValue
-        void* graphicSetVerticesDirty = nullptr;  // Graphic.SetVerticesDirty（可选，触发 UI 重建）
+        void* dofIsActiveImpl = nullptr;          // RPG.CustomRP.RPGDepthOfField.IsActiveImpl
+        void* graphicSetVerticesDirty = nullptr;  // Graphic.SetVerticesDirty（UID 隐藏主路径）
     };
 
     /// <summary>定位结果，用于宿主错误码分级。</summary>
@@ -34,36 +42,49 @@ namespace Il2CppBridge
     {
         Ok = 0,
         GameAssemblyMissing,
-        FindMissing,
-        GetComponentMissing,
         MainThreadEntryMissing,
         DitherEntryMissing,
+        DofEntryMissing,
+        GraphicEntryMissing,
     };
 
     /// <summary>
-    /// 定位全部目标。RVA 优先（4.5.0 dump.cs 实测值）；RVA 失效时只接受
-    /// 特征码的「唯一命中」，多命中一律失败 —— 参考实现的多候选硬试会调用到
-    /// Texture2D.SetPixels32 / Animator.Play 等无关函数，不能照搬。
+    /// 按动态特征码定位全部目标。只在工作线程做只读扫描，不调用任何 il2cpp 接口。
+    /// 必需目标（OnUpdate / Dither / DOF / SetVerticesDirty）任一失败即返回对应
+    /// 状态，全部唯一命中才返回 ResolveStatus::Ok。
     /// </summary>
     ResolveStatus Resolve(HMODULE gameAssembly, Functions& out);
 
     /// <summary>
-    /// 按层级路径取 UnityEngine.UI.Graphic 组件。
-    /// 必须在游戏主线程调用；失败返回 nullptr。
+    /// 读取任意地址的字节（先做模块内可读校验，再套 SEH）。
+    /// 供 UID 隐藏模块读取 il2cpp 对象头 / 字符串用。
     /// </summary>
-    void* FindGraphic(const char* path);
-
-    /// <summary>读取 Graphic.m_Color.a（dump.cs：m_Color Offset 0x20）。</summary>
-    bool ReadGraphicAlpha(void* graphic, float& alpha);
-
-    /// <summary>写入 Graphic.m_Color.a。只改 alpha，不动 RGB。</summary>
-    bool WriteGraphicAlpha(void* graphic, float alpha);
+    bool ReadBytes(const void* address, void* out, size_t size);
 
     /// <summary>
-    /// 通知 Graphic 顶点需要重建，让直接写入的 m_Color 立即生效。
-    /// 定位失败时是空操作；调用点不需要把它当成硬依赖。
+    /// 热路径用的裸读：跳过 VirtualQuery，只靠 SEH 兜底。
+    /// 只在「调用方保证对象有效」时使用（例如刚被游戏调用的 this 指针）。
     /// </summary>
-    void NotifyGraphicColorChanged(void* graphic);
+    bool ReadBytesRaw(const void* address, void* out, size_t size);
+
+    /// <summary>读取 float（含可读校验 + SEH）。</summary>
+    bool ReadFloat(const void* address, float& value);
+
+    /// <summary>写入 float（含可写校验 + SEH）。</summary>
+    bool WriteFloat(void* address, float value);
+
+    /// <summary>
+    /// IL2CPP 对象的类名：对象头 klass 在 +0x0，Il2CppClass::name 在 +0x10。
+    /// 返回的指针指向模块内常量区，调用方只做只读比较，不要长期保存。
+    /// 任意一步读不到就返回 nullptr。
+    /// </summary>
+    const char* ObjectClassName(const void* object);
+
+    /// <summary>
+    /// 读取 IL2CPP System.String：length 在 +0x10，UTF-16 字符数组在 +0x14。
+    /// 超出 capacity 时截断并把 length 写成实际拷贝数。空串 / 非法对象返回 false。
+    /// </summary>
+    bool ReadString(const void* stringObject, wchar_t* out, size_t capacity, int32_t& length);
 
     /// <summary>最近一次 Resolve 的地址表（供主线程 tick 读取）。</summary>
     const Functions& Resolved();

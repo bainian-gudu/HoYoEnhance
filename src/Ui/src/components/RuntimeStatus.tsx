@@ -66,13 +66,14 @@ export function RuntimeStatus({ app }: { app: AppState }) {
     },
   ];
 
-  // 位定义见 src/Common/IpcData.h：反虚化 bit0 反角色虚化 / bit1 马赛克就绪 / bit2 马赛克已生效，
-  // UID 隐藏 bit0 就绪 / bit1 生效中。
+  // 位定义见 src/Common/IpcData.h：反虚化 bit0 反角色虚化就绪 / bit1 马赛克就绪 / bit2 马赛克已生效 /
+  // bit3 反场景景深就绪，UID 隐藏 bit0 就绪 / bit1 生效中。
   // 列表来自当前游戏自己的注入模块：原神与星穹铁道的效果名称、条目数都各自独立。
   const features = injection.features.map(({ key, title }) => {
     const level: ReadyLevel = key === 'antiBlurPerspective' ? ((antiBlurState & 1) !== 0 ? 2 : 0)
       : key === 'antiBlurDiveMosaic' ? ((antiBlurState & 4) !== 0 ? 2 : (antiBlurState & 2) !== 0 ? 1 : 0)
-        : ((hideUidState & 2) !== 0 ? 2 : (hideUidState & 1) !== 0 ? 1 : 0);
+        : key === 'antiBlurDof' ? ((antiBlurState & 8) !== 0 ? 2 : 0)
+          : ((hideUidState & 2) !== 0 ? 2 : (hideUidState & 1) !== 0 ? 1 : 0);
     return { name: title, state: featureState(gameConfig[key], featuresActive, attached, level) };
   });
 

@@ -32,6 +32,8 @@ config.json
 .DS_Store
 Thumbs.db
 *~
+__pycache__/
+*.pyc
 
 # Extra docs (do not track) — 仓库内维护的说明文档例外
 docs/
@@ -39,6 +41,7 @@ docs/
 !README.md
 !packaging/README.md
 !tools/devcheck/README.md
+!src/StubStarRail/SIGNATURES.md
 
 # ---------------------------------------------------------------------------
 # 安装包打包（packaging/）
