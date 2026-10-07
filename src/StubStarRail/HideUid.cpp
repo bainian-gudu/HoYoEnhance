@@ -9,6 +9,11 @@
 // Graphic 实例，不必再用 GameObject.Find 走层级路径 —— 路径随版本改动是旧实现
 // 失效的直接原因。
 //
+// 组件判定：类名含 "Text" 的 Graphic 才处理。星铁 UI 的文本组件有多个类
+// （Text / LocalizedText / SRText / HoYoText ...），水印不一定是基类 "Text"；
+// 只比较 "Text" 会把用子类的对象整个跳过，这是「反虚化生效、UID 不生效」
+// 最可能的原因。
+//
 // 判定规则（不依赖任何 UI 节点名）：
 //   a) 文本含 "UID"（忽略大小写）且带 6~12 位连续数字 → 判定为 UID 水印，
 //      同时把这串数字记为「已知 UID」；
@@ -62,7 +67,6 @@ namespace
     bool g_onUpdateReady = false;
 
     // 以下状态只在游戏主线程访问（SetVerticesDirty / OnUpdate 都在主线程）。
-    void* g_textKlass = nullptr;
     HiddenEntry g_hidden[kMaxHidden]{};
     size_t g_hiddenCount = 0;
     wchar_t g_knownUid[16]{};
@@ -83,6 +87,18 @@ namespace
     bool IsDigit(wchar_t c)
     {
         return c >= L'0' && c <= L'9';
+    }
+
+    /// <summary>
+    /// 对象是否是 UI 文本组件：类名里含 "Text"。
+    /// 星铁 UI 的文本组件有 Text / LocalizedText / SRText / HoYoText /
+    /// HyperTextLink / DialogueText / DevUIText 等多个类，都继承
+    /// UnityEngine.UI.Text；只比较基类名 "Text" 会把用子类的对象整个跳过。
+    /// 用子串判断能覆盖这些子类，同时排除 Image / RawImage 等非文本 Graphic。
+    /// </summary>
+    bool IsTextComponentName(const char* name)
+    {
+        return name && std::strstr(name, "Text") != nullptr;
     }
 
     /// <summary>文本里是否出现 "UID"（忽略大小写）。</summary>
@@ -208,10 +224,7 @@ namespace
         g_hidden[kMaxHidden - 1].originalAlpha = originalAlpha;
     }
 
-    /// <summary>
-    /// SetVerticesDirty 内的高频路径：先按缓存的 Text 类指针做一次指针比较，
-    /// 不是 Text 就直接返回，避免每次都走类名读取。
-    /// </summary>
+    /// <summary>SetVerticesDirty 内的文本判定与隐藏路径。</summary>
     void HideIfUidText(void* self)
     {
         if (!self)
@@ -219,22 +232,9 @@ namespace
             return;
         }
 
-        void* klass = nullptr;
-        if (!Il2CppBridge::ReadBytesRaw(self, &klass, sizeof(klass)) || !klass)
-        {
-            return;
-        }
-
-        if (!g_textKlass)
-        {
-            const char* name = Il2CppBridge::ObjectClassName(self);
-            if (!name || std::strcmp(name, "Text") != 0)
-            {
-                return;
-            }
-            g_textKlass = klass;
-        }
-        else if (klass != g_textKlass)
+        // 每次都按类名判断：星铁的文本对象有 Text / LocalizedText 等多个类，
+        // 缓存单一 klass 会把后续出现的其它文本类全部挡掉。
+        if (!IsTextComponentName(Il2CppBridge::ObjectClassName(self)))
         {
             return;
         }
@@ -301,8 +301,7 @@ namespace
         for (size_t i = 0; i < g_hiddenCount; ++i)
         {
             void* graphic = g_hidden[i].graphic;
-            const char* name = Il2CppBridge::ObjectClassName(graphic);
-            if (!name || std::strcmp(name, "Text") != 0)
+            if (!IsTextComponentName(Il2CppBridge::ObjectClassName(graphic)))
             {
                 continue;
             }

@@ -9,8 +9,10 @@
 //
 //   1) Hook `UnityEngine.UI.Graphic.SetVerticesDirty`（动态特征码唯一命中 +
 //      相邻孪生函数校验），它是所有 UI 颜色 / 文本变化的必经点；
-//   2) 在 Hook 内读对象类名（Il2CppClass::name），只处理 `Text`；
-//   3) 读 `Text.m_Text`（+0xF8）判定是否 UID 文本，命中就把
+//   2) 在 Hook 内读对象类名（Il2CppClass::name），类名含 "Text" 的组件才处理
+//      （Text / LocalizedText / SRText / HoYoText ...；星铁 UID 水印用的是
+//      RPG.Client.LocalizedText，类名不是 "Text"，只比较 "Text" 会整个漏掉）；
+//   3) 读 `UnityEngine.UI.Text.m_Text`（+0xF8）判定是否 UID 文本，命中就把
 //      `Graphic.m_Color.a`（+0x20+0x0C）写 0；
 //   4) Hook `RPGApplication.OnUpdate` 只作为主线程 tick：处理关闭时的还原、
 //      上报状态位，不再用它去找对象。
