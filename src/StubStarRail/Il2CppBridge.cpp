@@ -21,6 +21,8 @@
 
 #include <Psapi.h>
 
+#include <cstdarg>
+#include <cstdio>
 #include <cstring>
 #include <new>
 
@@ -137,10 +139,74 @@ namespace
 
     Il2CppBridge::Functions g_functions{};
 
+    // ---- 诊断日志（排查 4.6 UID 节点路径用）------------------------------
+    // 只在 Resolve 完成与路径探测阶段写少量行；正常情况下每个进程最多几十行。
+    HANDLE g_diagFile = INVALID_HANDLE_VALUE;
+    bool g_diagTried = false;
+
+    HANDLE OpenDiagFile()
+    {
+        // 优先写 WSL 工作区：Windows 进程通过 9p 写进去，WSL 里可直接读。
+        const wchar_t* candidates[] = {
+            L"\\\\wsl.localhost\\Ubuntu\\home\\tushanhonghong\\workspace\\HoYoEnhance\\starrail-stub-diag.log",
+            L"\\\\wsl$\\Ubuntu\\home\\tushanhonghong\\workspace\\HoYoEnhance\\starrail-stub-diag.log",
+        };
+        for (const wchar_t* path : candidates)
+        {
+            HANDLE file = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                      nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (file != INVALID_HANDLE_VALUE)
+            {
+                return file;
+            }
+        }
+
+        wchar_t temp[MAX_PATH]{};
+        if (GetTempPathW(MAX_PATH, temp) > 0)
+        {
+            wchar_t path[MAX_PATH * 2]{};
+            lstrcpynW(path, temp, MAX_PATH);
+            lstrcatW(path, L"StarRailStub-diag.log");
+            return CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        }
+        return INVALID_HANDLE_VALUE;
+    }
+
+    void DiagLogLine(const char* line)
+    {
+        if (!g_diagTried)
+        {
+            g_diagTried = true;
+            g_diagFile = OpenDiagFile();
+        }
+        if (g_diagFile == INVALID_HANDLE_VALUE || !line)
+        {
+            return;
+        }
+
+        DWORD written = 0;
+        WriteFile(g_diagFile, line, static_cast<DWORD>(std::strlen(line)), &written, nullptr);
+        WriteFile(g_diagFile, "\r\n", 2, &written, nullptr);
+        FlushFileBuffers(g_diagFile);
+    }
+
+    void DiagLogf(const char* format, ...)
+    {
+        char buffer[512]{};
+        va_list args;
+        va_start(args, format);
+        std::vsnprintf(buffer, sizeof(buffer), format, args);
+        va_end(args);
+        DiagLogLine(buffer);
+    }
+
     // ---- 路径查找运行时状态（只在游戏主线程访问）--------------------------
     void* g_findResolved = nullptr;          // 探测确定的 GameObject.Find
     void* g_getComponentResolved = nullptr;  // 探测确定的 GameObject.GetComponent(string)
     bool g_pathLookupProbed = false;         // 是否已成功探测（成功后才置位）
+    bool g_pathDiagFirstTry = false;         // 首次探测尝试是否已写日志
+    bool g_pathDiagSuccess = false;          // 首次探测成功是否已写日志
 
     // 自建 IL2CPP 字符串：星铁没有可用的 il2cpp_string_new 导出，参考实现同样
     // 手工拼 length + chars。只在 Find / GetComponent 调用期间有效，调用后立即
@@ -492,6 +558,14 @@ namespace Il2CppBridge
                           out.getComponentCandidateCount, kMaxPathCandidates);
 
         g_functions = out;
+        DiagLogLine("---- StarRailStub session start ----");
+        DiagLogf("[resolve] onUpdate=0x%p ditherMerge=0x%p ditherDist=0x%p ditherElev=0x%p "
+                 "dof=0x%p graphic=0x%p tmpText=0x%p tmpUgui=%zu find=%zu getComponent=%zu "
+                 "base=0x%p",
+                 out.rpgApplicationOnUpdate, out.ditherSetAlphaValue, out.ditherSetDistanceAlpha,
+                 out.ditherSetElevationAlpha, out.dofIsActiveImpl, out.graphicSetVerticesDirty,
+                 out.tmpTextSetVerticesDirty, out.tmpUguiDirtyCount, out.findCandidateCount,
+                 out.getComponentCandidateCount, static_cast<void*>(gameAssembly));
         return ResolveStatus::Ok;
     }
 
@@ -624,12 +698,24 @@ namespace Il2CppBridge
         return true;
     }
 
+    void DiagLog(const char* line)
+    {
+        DiagLogLine(line);
+    }
+
     void* FindGraphicByPath(const char* path)
     {
         const Functions& functions = g_functions;
         if (!path || functions.findCandidateCount == 0 ||
             functions.getComponentCandidateCount == 0)
         {
+            if (!g_pathDiagFirstTry)
+            {
+                g_pathDiagFirstTry = true;
+                DiagLogf("[path] unavailable: path=%s findCandidates=%zu getComponentCandidates=%zu",
+                         path ? path : "(null)", functions.findCandidateCount,
+                         functions.getComponentCandidateCount);
+            }
             return nullptr;
         }
 
@@ -637,6 +723,30 @@ namespace Il2CppBridge
         if (!pathString.Valid())
         {
             return nullptr;
+        }
+
+        const bool logTry = !g_pathDiagFirstTry;
+        if (logTry)
+        {
+            g_pathDiagFirstTry = true;
+            DiagLogf("[path] probe start: path=%s findCandidates=%zu getComponentCandidates=%zu",
+                     path, functions.findCandidateCount, functions.getComponentCandidateCount);
+
+            // 先用一个大概率存在的探针路径判断 Find 候选本身是否可用：
+            // 若 /UIRoot 能返回 GameObject，说明候选真身正确，后续为空就只能是
+            // 「UID 节点路径变了」。
+            ScopedIl2CppString probe("/UIRoot");
+            if (probe.Valid())
+            {
+                for (size_t i = 0; i < functions.findCandidateCount; ++i)
+                {
+                    void* found = CallFindRaw(functions.findCandidates[i], probe.Get());
+                    const char* probeClass = found ? ObjectClassName(found) : nullptr;
+                    DiagLogf("[path] probe /UIRoot find[%zu] 0x%p -> 0x%p class=%s", i,
+                             functions.findCandidates[i], found,
+                             probeClass ? probeClass : "(null)");
+                }
+            }
         }
 
         // 探测成功后只用缓存的真身，避免每帧把全部候选都调一遍。
@@ -664,17 +774,19 @@ namespace Il2CppBridge
         {
             void* candidate = functions.findCandidates[i];
             void* found = CallFindRaw(candidate, pathString.Get());
-            if (!found)
+            const char* className = found ? ObjectClassName(found) : nullptr;
+            if (logTry)
+            {
+                DiagLogf("[path] find[%zu] 0x%p -> 0x%p class=%s", i, candidate, found,
+                         className ? className : "(null)");
+            }
+            if (!found || !className || !std::strstr(className, "GameObject"))
             {
                 continue;
             }
-            const char* className = ObjectClassName(found);
-            if (className && std::strstr(className, "GameObject"))
-            {
-                findHit = candidate;
-                gameObject = found;
-                break;
-            }
+            findHit = candidate;
+            gameObject = found;
+            break;
         }
         if (!findHit)
         {
@@ -692,18 +804,26 @@ namespace Il2CppBridge
         {
             void* candidate = functions.getComponentCandidates[i];
             void* graphic = CallGetComponentRaw(candidate, gameObject, graphicName.Get());
-            if (!graphic)
+            const char* className = graphic ? ObjectClassName(graphic) : nullptr;
+            if (logTry)
+            {
+                DiagLogf("[path] getComponent[%zu] 0x%p -> 0x%p class=%s", i, candidate, graphic,
+                         className ? className : "(null)");
+            }
+            if (!graphic || !className || !std::strstr(className, "Graphic"))
             {
                 continue;
             }
-            const char* className = ObjectClassName(graphic);
-            if (className && std::strstr(className, "Graphic"))
+            g_findResolved = findHit;
+            g_getComponentResolved = candidate;
+            g_pathLookupProbed = true;
+            if (logTry || !g_pathDiagSuccess)
             {
-                g_findResolved = findHit;
-                g_getComponentResolved = candidate;
-                g_pathLookupProbed = true;
-                return graphic;
+                g_pathDiagSuccess = true;
+                DiagLogf("[path] resolved: find=0x%p getComponent=0x%p path=%s graphicClass=%s",
+                         findHit, candidate, path, className);
             }
+            return graphic;
         }
         return nullptr;
     }

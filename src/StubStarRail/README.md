@@ -155,6 +155,22 @@ Sprite 都可能），二是运行时动态创建的文本组件。任何单一�
 
 不要用「关掉 `s_UICamera`」那种做法（Pipsi 的 `hide_ui.cpp`）：会把整个 HUD 一起藏掉。
 
+### 排查：运行时诊断日志
+
+UID 节点路径会随版本变，出现「开关已开但水印还在」时，Stub 会把探测过程写进
+`starrail-stub-diag.log`（优先写 WSL 工作区，失败退到 `%TEMP%`；文件名已加进
+`.gitignore`）：
+
+- `[resolve]`：各目标地址、候选数与 `GameAssembly.dll` 基址（可换算 RVA 对照 dump）；
+- `[path] probe /UIRoot find[i]`：用必定存在的探针路径验证 `Find` 候选本身是否可用；
+- `[path] find[i]` / `[path] getComponent[i]`：每个候选的返回值与返回对象类名；
+- `[path] resolved`：探测成功后缓存的 `Find` / `GetComponent` 与命中的 Graphic 类名；
+- `[graphic] class=`：Hook 到过的 Graphic 类名（去重，最多 32 条）；
+- `[uid] matched text`：文本识别命中的类名与字段偏移。
+
+据此可以区分三种情况：`Find` 候选全错（探测不到 `GameObject`）、UID 节点路径已变
+（`Find` 可用但返回空）、或 Hook 根本没被触发（日志里没有任何 `[graphic]` 行）。
+
 ## 六、功能 2 / 3：两项反虚化
 
 「2 个反虚化」指两条互相独立的链路：

@@ -38,6 +38,8 @@
 #include "HideUid.h"
 
 #include <atomic>
+#include <cstdarg>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 
@@ -133,6 +135,48 @@ namespace
     bool IsTextComponentName(const char* name)
     {
         return name && std::strstr(name, "Text") != nullptr;
+    }
+
+    // ---- 诊断（排查 UID 组件类型 / 节点路径）-----------------------------
+    // 记录 hook 到过的每个 Graphic 类名（去重、限量），便于判断 UID 水印到底用
+    // 的是 UI.Text、TMP 还是 Image；只在出现新类名时写一行日志。
+    constexpr size_t kMaxDiagClassNames = 32;
+    char g_diagClassNames[kMaxDiagClassNames][64]{};
+    size_t g_diagClassNameCount = 0;
+
+    void DiagLogLinef(const char* format, ...)
+    {
+        char buffer[256]{};
+        va_list args;
+        va_start(args, format);
+        std::vsnprintf(buffer, sizeof(buffer), format, args);
+        va_end(args);
+        Il2CppBridge::DiagLog(buffer);
+    }
+
+    void DiagRememberClassName(const char* name)
+    {
+        if (!name || *name == '\0')
+        {
+            return;
+        }
+        for (size_t i = 0; i < g_diagClassNameCount; ++i)
+        {
+            if (std::strcmp(g_diagClassNames[i], name) == 0)
+            {
+                return;
+            }
+        }
+        if (g_diagClassNameCount >= kMaxDiagClassNames)
+        {
+            return;
+        }
+
+        std::strncpy(g_diagClassNames[g_diagClassNameCount], name, 63);
+        g_diagClassNames[g_diagClassNameCount][63] = '\0';
+        ++g_diagClassNameCount;
+
+        DiagLogLinef("[graphic] class=%s", name);
     }
 
     /// <summary>文本里是否出现 "UID"（忽略大小写）。</summary>
@@ -320,7 +364,9 @@ namespace
 
         // 每次都按类名判断：星铁的文本对象有 Text / LocalizedText / TMP_Text /
         // TextMeshProUGUI 等多个类，缓存单一 klass 会把后续出现的其它文本类全部挡掉。
-        if (!IsTextComponentName(Il2CppBridge::ObjectClassName(self)))
+        const char* className = Il2CppBridge::ObjectClassName(self);
+        DiagRememberClassName(className);
+        if (!IsTextComponentName(className))
         {
             return;
         }
@@ -330,6 +376,7 @@ namespace
         {
             if (MatchUidTextAtOffset(self, offset))
             {
+                DiagLogLinef("[uid] matched text: class=%s offset=0x%zX", className, offset);
                 HideGraphic(self);
                 return;
             }
@@ -387,6 +434,7 @@ namespace
             void* graphic = Il2CppBridge::FindGraphicByPath(path);
             if (graphic)
             {
+                DiagRememberClassName(Il2CppBridge::ObjectClassName(graphic));
                 HideGraphic(graphic);
             }
         }
