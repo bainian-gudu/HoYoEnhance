@@ -117,8 +117,11 @@ namespace Il2CppBridge
     /// 命中后直接写 Graphic.m_Color.a，对组件类型免疫 —— 无论水印是 Text、TMP 还是
     /// Image / Sprite，只要挂在节点上就能抓到，是文本识别失效时的兜底路径。
     ///
-    /// Find / GetComponent 的候选多命中，首次调用会逐个探测（校验返回值类名），
-    /// 成功后缓存真身；路径当前不存在或探测失败返回 nullptr，下次仍会重试。
+    /// Find / GetComponent 的候选天然多命中，但**只调用文档记录的那个 Find 下标**
+    /// （见 kPreferredFindIndex）：其余命中是无关的 il2cpp icall 桩，逐个硬试会误调
+    /// 有副作用的函数（4.6 实测：开启遮挡 UID 后打开背包出问题）。GetComponent 候选
+    /// 在有效 GameObject 上试，用类名或对象头 + m_Color 校验挑真身，成功后缓存。
+    /// 路径当前不存在或探测失败返回 nullptr，下次仍会重试。
     /// 所有游戏调用都用 SEH 包住，绝不把异常抛回 Hook。
     /// </summary>
     void* FindGraphicByPath(const char* path);

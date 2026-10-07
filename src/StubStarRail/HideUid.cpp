@@ -125,18 +125,6 @@ namespace
         return c >= L'0' && c <= L'9';
     }
 
-    /// <summary>
-    /// 对象是否是 UI 文本组件：类名里含 "Text"。
-    /// 星铁 UI 的文本组件有 Text / LocalizedText / SRText / HoYoText /
-    /// HyperTextLink / DialogueText / DevUIText 等多个类，都继承
-    /// UnityEngine.UI.Text；只比较基类名 "Text" 会把用子类的对象整个跳过。
-    /// 用子串判断能覆盖这些子类，同时排除 Image / RawImage 等非文本 Graphic。
-    /// </summary>
-    bool IsTextComponentName(const char* name)
-    {
-        return name && std::strstr(name, "Text") != nullptr;
-    }
-
     // ---- 诊断（排查 UID 组件类型 / 节点路径）-----------------------------
     // 记录 hook 到过的每个 Graphic 类名（去重、限量），便于判断 UID 水印到底用
     // 的是 UI.Text、TMP 还是 Image；只在出现新类名时写一行日志。
@@ -362,21 +350,18 @@ namespace
             return;
         }
 
-        // 每次都按类名判断：星铁的文本对象有 Text / LocalizedText / TMP_Text /
-        // TextMeshProUGUI 等多个类，缓存单一 klass 会把后续出现的其它文本类全部挡掉。
-        const char* className = Il2CppBridge::ObjectClassName(self);
-        DiagRememberClassName(className);
-        if (!IsTextComponentName(className))
-        {
-            return;
-        }
+        // 不再用类名当门槛：4.6 起 ObjectClassName 对部分对象返回 null，
+        // 「拿不到类名就整个跳过」会让文本识别彻底失效。直接按文本字段判定，
+        // 偏移不对时读到的是别的字段，MatchUidTextAtOffset 会因「指针 / 长度 /
+        // 内容」不合法而挡掉，命中才写 alpha。
+        DiagRememberClassName(Il2CppBridge::ObjectClassName(self));
 
         // UI.Text 与 TMP_Text 的文本字段偏移不同，两个都试一遍。
         for (size_t offset : kTextTextOffsets)
         {
             if (MatchUidTextAtOffset(self, offset))
             {
-                DiagLogLinef("[uid] matched text: class=%s offset=0x%zX", className, offset);
+                DiagLogLinef("[uid] matched text: offset=0x%zX", offset);
                 HideGraphic(self);
                 return;
             }

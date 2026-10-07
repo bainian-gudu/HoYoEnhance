@@ -703,6 +703,102 @@ namespace Il2CppBridge
         DiagLogLine(line);
     }
 
+    // UnityEngine.UI.Graphic.m_Color：RGBA 四个 float（分量在 [0,1]）。
+    // 类名读不到时用它做兜底校验，见 IsPlausibleGraphic。
+    constexpr size_t kGraphicColorOffset = 0x20;
+
+    // GameObject.Find 在 kGameObjectFindPattern 命中集合里的下标。
+    //   4.5.0        第 4 个命中 = 0x1DEDE300
+    //   2026-09-28   第 4 个命中 = 0x1F3C1130
+    //   当前 4.6 运行日志里 find[3] = RVA 0x1F3C1130，与上面两版一致。
+    // 只信这一个下标：其余命中是无关的 il2cpp icall 桩（日志实测返回垃圾指针），
+    // 逐个硬试会调用到有副作用的函数（4.6 实测：开启遮挡 UID 后打开背包出问题）。
+    // 下标失效时最多是「这次不隐藏」，绝不去调其它函数。
+    constexpr size_t kPreferredFindIndex = 3;
+
+    /// <summary>
+    /// 诊断：把一个对象头的原始字段写进日志（klass / klass->name 指针 + 名字前
+    /// 几个字节）。用于判断 ObjectClassName 返回 null 到底是「对象不是 GameObject」
+    /// 还是「IL2CPP 对象头偏移读不到」。
+    /// </summary>
+    void DiagDumpObjectHeader(const char* tag, size_t index, void* object)
+    {
+        if (!object)
+        {
+            return;
+        }
+
+        void* klass = nullptr;
+        const bool klassOk = ReadBytes(static_cast<const uint8_t*>(object) + kIl2CppClassOffset,
+                                       &klass, sizeof(klass));
+        void* namePtr = nullptr;
+        bool nameOk = false;
+        if (klassOk && klass)
+        {
+            nameOk = ReadBytes(static_cast<const uint8_t*>(klass) + kIl2CppClassNameOffset,
+                               &namePtr, sizeof(namePtr));
+        }
+
+        char nameHead[24]{};
+        if (nameOk && namePtr && IsReadable(namePtr, sizeof(nameHead)))
+        {
+            std::memcpy(nameHead, namePtr, sizeof(nameHead));
+            for (char& c : nameHead)
+            {
+                if (c < 0x20 || c > 0x7E)
+                {
+                    c = '.';
+                }
+            }
+            nameHead[sizeof(nameHead) - 1] = '\0';
+        }
+        else
+        {
+            std::strcpy(nameHead, "(unreadable)");
+        }
+
+        DiagLogf("%s[%zu] object=0x%p klass=0x%p name=0x%p bytes=%s", tag, index, object,
+                 klassOk ? klass : nullptr, nameOk ? namePtr : nullptr, nameHead);
+    }
+
+    /// <summary>
+    /// 一个指针是否像 UnityEngine.UI.Graphic。
+    /// 首选类名含 "Graphic"；类名读得到但不是 Graphic 时明确排除；类名读不到
+    /// （4.6 实测 ObjectClassName 对部分候选返回 null）时退回校验对象头 + m_Color：
+    /// 先确认是 IL2CPP 对象（klass 可读），再要求四个颜色分量都能读成 [0,1] 的 float。
+    /// </summary>
+    bool IsPlausibleGraphic(const void* graphic)
+    {
+        const char* name = ObjectClassName(graphic);
+        if (name)
+        {
+            return std::strstr(name, "Graphic") != nullptr;
+        }
+
+        void* klass = nullptr;
+        if (!ReadBytes(static_cast<const uint8_t*>(graphic) + kIl2CppClassOffset, &klass,
+                       sizeof(klass)) ||
+            !klass)
+        {
+            return false;
+        }
+
+        float color[4]{};
+        if (!ReadBytes(static_cast<const uint8_t*>(graphic) + kGraphicColorOffset, color,
+                       sizeof(color)))
+        {
+            return false;
+        }
+        for (float component : color)
+        {
+            if (!(component >= 0.0f && component <= 1.0f))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
     void* FindGraphicByPath(const char* path)
     {
         const Functions& functions = g_functions;
@@ -732,19 +828,21 @@ namespace Il2CppBridge
             DiagLogf("[path] probe start: path=%s findCandidates=%zu getComponentCandidates=%zu",
                      path, functions.findCandidateCount, functions.getComponentCandidateCount);
 
-            // 先用一个大概率存在的探针路径判断 Find 候选本身是否可用：
-            // 若 /UIRoot 能返回 GameObject，说明候选真身正确，后续为空就只能是
-            // 「UID 节点路径变了」。
+            // 只探针文档记录的那个 Find 候选（见 kPreferredFindIndex）：/UIRoot
+            // 能返回 GameObject 就说明它是对的。不再遍历其它候选 —— 那些是无关的
+            // icall 桩，调用它们有副作用。
             ScopedIl2CppString probe("/UIRoot");
-            if (probe.Valid())
+            if (probe.Valid() && functions.findCandidateCount > kPreferredFindIndex)
             {
-                for (size_t i = 0; i < functions.findCandidateCount; ++i)
+                void* findCandidate = functions.findCandidates[kPreferredFindIndex];
+                void* found = CallFindRaw(findCandidate, probe.Get());
+                const char* probeClass = found ? ObjectClassName(found) : nullptr;
+                DiagLogf("[path] probe /UIRoot find[%zu] 0x%p -> 0x%p class=%s",
+                         kPreferredFindIndex, findCandidate, found,
+                         probeClass ? probeClass : "(null)");
+                if (found)
                 {
-                    void* found = CallFindRaw(functions.findCandidates[i], probe.Get());
-                    const char* probeClass = found ? ObjectClassName(found) : nullptr;
-                    DiagLogf("[path] probe /UIRoot find[%zu] 0x%p -> 0x%p class=%s", i,
-                             functions.findCandidates[i], found,
-                             probeClass ? probeClass : "(null)");
+                    DiagDumpObjectHeader("[path] probeHeader", kPreferredFindIndex, found);
                 }
             }
         }
@@ -765,32 +863,12 @@ namespace Il2CppBridge
             return CallGetComponentRaw(g_getComponentResolved, gameObject, graphicName.Get());
         }
 
-        // 未探测：逐个候选试。GameObject.Find 返回的必然是 GameObject，
-        // GetComponent("UnityEngine.UI.Graphic") 返回的必然是 Graphic，用返回值
-        // 类名做交叉校验，避免把无关的 icall 转发桩当成真身。
-        void* findHit = nullptr;
-        void* gameObject = nullptr;
-        for (size_t i = 0; i < functions.findCandidateCount; ++i)
+        // 未探测：只调用文档记录的 Find 候选（kPreferredFindIndex），拿到 GameObject
+        // 后再在有效对象上试 GetComponent 候选（用类名或 m_Color 校验挑真身）。
+        // 不再遍历 Find 候选：那些 icall 桩里多数不是 GameObject.Find，硬试会误调
+        // 有副作用的函数。
+        if (functions.findCandidateCount <= kPreferredFindIndex)
         {
-            void* candidate = functions.findCandidates[i];
-            void* found = CallFindRaw(candidate, pathString.Get());
-            const char* className = found ? ObjectClassName(found) : nullptr;
-            if (logTry)
-            {
-                DiagLogf("[path] find[%zu] 0x%p -> 0x%p class=%s", i, candidate, found,
-                         className ? className : "(null)");
-            }
-            if (!found || !className || !std::strstr(className, "GameObject"))
-            {
-                continue;
-            }
-            findHit = candidate;
-            gameObject = found;
-            break;
-        }
-        if (!findHit)
-        {
-            // 路径当前不存在（UI 尚未加载 / 该界面未打开），下次再试。
             return nullptr;
         }
 
@@ -800,28 +878,52 @@ namespace Il2CppBridge
             return nullptr;
         }
 
-        for (size_t i = 0; i < functions.getComponentCandidateCount; ++i)
+        void* findCandidate = functions.findCandidates[kPreferredFindIndex];
+        void* gameObject = CallFindRaw(findCandidate, pathString.Get());
+        if (logTry)
         {
-            void* candidate = functions.getComponentCandidates[i];
-            void* graphic = CallGetComponentRaw(candidate, gameObject, graphicName.Get());
-            const char* className = graphic ? ObjectClassName(graphic) : nullptr;
-            if (logTry)
+            DiagLogf("[path] find[%zu] 0x%p -> 0x%p", kPreferredFindIndex, findCandidate,
+                     gameObject);
+            if (gameObject)
             {
-                DiagLogf("[path] getComponent[%zu] 0x%p -> 0x%p class=%s", i, candidate, graphic,
-                         className ? className : "(null)");
+                DiagDumpObjectHeader("[path] findHeader", kPreferredFindIndex, gameObject);
             }
-            if (!graphic || !className || !std::strstr(className, "Graphic"))
+        }
+        if (!gameObject)
+        {
+            // 路径当前不存在（UI 尚未加载 / 该界面未打开），下次再试。
+            return nullptr;
+        }
+
+        for (size_t g = 0; g < functions.getComponentCandidateCount; ++g)
+        {
+            void* getComponentCandidate = functions.getComponentCandidates[g];
+            void* graphic = CallGetComponentRaw(getComponentCandidate, gameObject, graphicName.Get());
+            if (!graphic)
             {
                 continue;
             }
-            g_findResolved = findHit;
-            g_getComponentResolved = candidate;
+            const char* className = ObjectClassName(graphic);
+            if (logTry)
+            {
+                DiagLogf("[path] getComponent[%zu] 0x%p -> 0x%p class=%s", g,
+                         getComponentCandidate, graphic, className ? className : "(null)");
+            }
+            if (!IsPlausibleGraphic(graphic))
+            {
+                continue;
+            }
+
+            g_findResolved = findCandidate;
+            g_getComponentResolved = getComponentCandidate;
             g_pathLookupProbed = true;
             if (logTry || !g_pathDiagSuccess)
             {
                 g_pathDiagSuccess = true;
-                DiagLogf("[path] resolved: find=0x%p getComponent=0x%p path=%s graphicClass=%s",
-                         findHit, candidate, path, className);
+                DiagLogf("[path] resolved: find#%zu=0x%p getComponent#%zu=0x%p path=%s "
+                         "graphicClass=%s",
+                         kPreferredFindIndex, findCandidate, g, getComponentCandidate, path,
+                         className ? className : "(null)");
             }
             return graphic;
         }
