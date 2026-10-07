@@ -107,6 +107,12 @@ namespace Il2CppBridge
     /// </summary>
     bool ReadString(const void* stringObject, wchar_t* out, size_t capacity, int32_t& length);
 
+    /// <summary>
+    /// 热路径版 ReadString：跳过 VirtualQuery，只靠 SEH 兜底。调用方必须保证
+    /// stringObject 已经过校验（例如刚从有效组件字段里取出的 m_Text / m_text）。
+    /// </summary>
+    bool ReadStringRaw(const void* stringObject, wchar_t* out, size_t capacity, int32_t& length);
+
     /// <summary>最近一次 Resolve 的地址表（供主线程 tick 读取）。</summary>
     const Functions& Resolved();
 

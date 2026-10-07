@@ -698,6 +698,38 @@ namespace Il2CppBridge
         return true;
     }
 
+    bool ReadStringRaw(const void* stringObject, wchar_t* out, size_t capacity, int32_t& length)
+    {
+        length = 0;
+        if (!stringObject || !out || capacity == 0)
+        {
+            return false;
+        }
+
+        int32_t rawLength = 0;
+        if (!ReadBytesRaw(static_cast<const uint8_t*>(stringObject) + kStringLengthOffset,
+                          &rawLength, sizeof(rawLength)) ||
+            rawLength < 0)
+        {
+            return false;
+        }
+
+        const int32_t copyLength = rawLength < static_cast<int32_t>(capacity)
+                                       ? rawLength
+                                       : static_cast<int32_t>(capacity) - 1;
+        if (copyLength > 0)
+        {
+            if (!ReadBytesRaw(static_cast<const uint8_t*>(stringObject) + kStringCharsOffset, out,
+                              static_cast<size_t>(copyLength) * sizeof(wchar_t)))
+            {
+                return false;
+            }
+        }
+        out[copyLength] = L'\0';
+        length = copyLength;
+        return true;
+    }
+
     void DiagLog(const char* line)
     {
         DiagLogLine(line);

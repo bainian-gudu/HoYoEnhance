@@ -315,7 +315,7 @@ namespace
 
         wchar_t buffer[64]{};
         int32_t length = 0;
-        if (!Il2CppBridge::ReadString(text, buffer, 64, length))
+        if (!Il2CppBridge::ReadStringRaw(text, buffer, 64, length))
         {
             return false;
         }
@@ -351,17 +351,18 @@ namespace
         }
 
         // 不再用类名当门槛：4.6 起 ObjectClassName 对部分对象返回 null，
-        // 「拿不到类名就整个跳过」会让文本识别彻底失效。直接按文本字段判定，
-        // 偏移不对时读到的是别的字段，MatchUidTextAtOffset 会因「指针 / 长度 /
-        // 内容」不合法而挡掉，命中才写 alpha。
-        DiagRememberClassName(Il2CppBridge::ObjectClassName(self));
-
+        // 「拿不到类名就整个跳过」会让文本识别彻底失效。也不在热路径读类名 ——
+        // ObjectClassName 每次要做几次 VirtualQuery，SetVerticesDirty 每帧被调很多
+        // 次，放在这里会拖慢 UI。直接按文本字段判定，命中后才读类名写诊断。
         // UI.Text 与 TMP_Text 的文本字段偏移不同，两个都试一遍。
         for (size_t offset : kTextTextOffsets)
         {
             if (MatchUidTextAtOffset(self, offset))
             {
-                DiagLogLinef("[uid] matched text: offset=0x%zX", offset);
+                const char* className = Il2CppBridge::ObjectClassName(self);
+                DiagRememberClassName(className);
+                DiagLogLinef("[uid] matched text: class=%s offset=0x%zX",
+                             className ? className : "(null)", offset);
                 HideGraphic(self);
                 return;
             }
