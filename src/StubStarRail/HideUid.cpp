@@ -19,9 +19,9 @@
 //      在主线程 tick 里按 UI 层级路径 GameObject.Find → GetComponent(
 //      "UnityEngine.UI.Graphic") 直接取到 Graphic 并写 m_Color.a = 0。
 //      对组件类型免疫 —— 水印无论用 Text、TMP 还是 Image / Sprite，只要挂在节点上
-//      就能抓到。Find 只调用文档记录的下标（见 Il2CppBridge kPreferredFindIndex），
-//      GetComponent 用类名或 m_Color 运行时校验挑真身；不做多候选硬试（会误调无关
-//      的 il2cpp 函数，4.6 实测会干扰游戏）。
+//      就能抓到。Find / GetComponent 的候选由 Il2CppBridge 按固定相对距离动态配对，
+//      不逐个硬试（会误调无关的 il2cpp 函数，4.6 实测会干扰游戏）；开关刚打开时
+//      立即跑一次，覆盖主界面 UID 不重建文本、页面不刷新就不生效的情况。
 //
 // 文本判定规则（不依赖任何 UI 节点名）：
 //   a) 文本含 "UID"（忽略大小写）且带 6~12 位连续数字 → 判定为 UID 水印，
@@ -30,8 +30,8 @@
 //      （覆盖只显示数字的资料页）。
 //
 // 命中后把 Graphic.m_Color.a（+0x20+0x0C）写 0，并记录原值以便关闭开关时还原。
-// 所有读写都先做可读 / 可写校验再套 SEH；还原前重新校验类名，避免 GC 回收后
-// 误写无关对象。
+// 所有读写都先做可读 / 可写校验再套 SEH；还原前校验对象头 klass 可读，避免 GC
+// 回收后误写无关对象。
 // =============================================================================
 
 #include "HideUid.h"
@@ -98,6 +98,7 @@ namespace
     bool g_tmpUguiDirtyBReady = false;
     bool g_onUpdateReady = false;
     int32_t g_pathLookupCountdown = 0;
+    bool g_wasHideEnabled = false;
 
     // 以下状态只在游戏主线程访问（SetVerticesDirty / OnUpdate 都在主线程）。
     HiddenEntry g_hidden[kMaxHidden]{};
@@ -277,8 +278,46 @@ namespace
         return MatchUidText(buffer, length);
     }
 
-    /// <summary>把一个已确认的 Graphic 置为全透明，并记录原 alpha 以便还原。</summary>
-    void HideGraphic(void* graphic)
+    /// <summary>
+    /// 主动把 Graphic 标脏，触发一次顶点重建。路径查找和关闭还原都不在
+    /// SetVerticesDirty 调用栈里，只改 m_Color 不会刷新已生成的网格。
+    /// 这里调用的是 MinHook 保存的原函数跳板，不会再次进入本方 Hook。
+    /// </summary>
+    void MarkGraphicDirty(void* graphic)
+    {
+        if (!graphic || !g_originalSetVerticesDirty)
+        {
+            return;
+        }
+#if defined(_MSC_VER)
+        __try
+        {
+            reinterpret_cast<SetVerticesDirtyFn>(g_originalSetVerticesDirty)(graphic);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            // 单个对象失效不终止模块。
+        }
+#else
+        reinterpret_cast<SetVerticesDirtyFn>(g_originalSetVerticesDirty)(graphic);
+#endif
+    }
+
+    /// <summary>
+    /// 还原前的存活校验。不能用 ObjectClassName：4.6 起真实 UID 对象也会返回
+    /// null，用它当门槛会把所有待还原对象全部跳过。这里只确认对象头 klass 可读。
+    /// </summary>
+    bool IsGraphicAlive(void* graphic)
+    {
+        void* klass = nullptr;
+        return Il2CppBridge::ReadBytes(graphic, &klass, sizeof(klass)) && klass != nullptr;
+    }
+
+    /// <summary>
+    /// 把一个已确认的 Graphic 置为全透明，并记录原 alpha 以便还原。
+    /// markDirty=false 用于文本 Hook：紧接着会调用原 SetVerticesDirty，自然会重建。
+    /// </summary>
+    void HideGraphic(void* graphic, bool markDirty)
     {
         if (!graphic)
         {
@@ -295,6 +334,10 @@ namespace
 
         RememberHidden(graphic, alpha);
         Il2CppBridge::WriteFloat(static_cast<uint8_t*>(graphic) + kGraphicColorAlphaOffset, 0.0f);
+        if (markDirty)
+        {
+            MarkGraphicDirty(graphic);
+        }
     }
 
     /// <summary>SetVerticesDirty 内的文本判定与隐藏路径。</summary>
@@ -315,7 +358,7 @@ namespace
         {
             if (MatchUidTextAtOffset(self, offset))
             {
-                HideGraphic(self);
+                HideGraphic(self, false);
                 return;
             }
         }
@@ -343,14 +386,13 @@ namespace
         for (size_t i = 0; i < g_hiddenCount; ++i)
         {
             void* graphic = g_hidden[i].graphic;
-            // 路径查找可能隐藏的是 Image / Sprite 等非文本 Graphic，因此这里只校验
-            // 对象仍然存活（类名可读），不要求类名含 "Text"。
-            if (!Il2CppBridge::ObjectClassName(graphic))
+            if (!IsGraphicAlive(graphic))
             {
                 continue;
             }
             Il2CppBridge::WriteFloat(static_cast<uint8_t*>(graphic) + kGraphicColorAlphaOffset,
                                      g_hidden[i].originalAlpha);
+            MarkGraphicDirty(graphic);
         }
         g_hiddenCount = 0;
     }
@@ -372,7 +414,7 @@ namespace
             void* graphic = Il2CppBridge::FindGraphicByPath(path);
             if (graphic)
             {
-                HideGraphic(graphic);
+                HideGraphic(graphic, true);
             }
         }
     }
@@ -391,7 +433,16 @@ namespace
             RestoreAll();
         }
 
-        if (ipc->HideUid != 0)
+        const bool hideEnabled = ipc->HideUid != 0;
+        if (hideEnabled && !g_wasHideEnabled)
+        {
+            // 开关刚打开时立即跑一次兜底查找：主界面 UID 不会重建文本，
+            // 不能等文本重建通知，否则要切页面才生效。
+            g_pathLookupCountdown = 0;
+        }
+        g_wasHideEnabled = hideEnabled;
+
+        if (hideEnabled)
         {
             PathLookupTick();
         }
@@ -491,6 +542,7 @@ namespace HideUid
         // 会立刻被旧的 faulted 状态再次判为 Error。
         g_faulted.store(false, std::memory_order_relaxed);
         g_pathLookupCountdown = 0;
+        g_wasHideEnabled = false;
 
         if (!g_onUpdateReady)
         {

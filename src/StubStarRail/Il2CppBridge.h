@@ -29,7 +29,8 @@ namespace Il2CppBridge
     /// <summary>
     /// 路径查找候选上限。GameObject.Find / GameObject.GetComponent(string) 的
     /// 特征码是 IL2CPP 的 icall 转发桩，天然多命中（4.5.0 与 2026-09-28 两版都
-    /// 各命中 8 处），因此不能用「唯一命中」判定，改由主线程运行时探测挑出真身。
+    /// 各命中 8 处），因此不能用「唯一命中」判定。两者在模块内的相对距离固定，
+    /// 用这一对结构关系动态配对，不按命中序号挑选。
     /// </summary>
     constexpr size_t kMaxPathCandidates = 24;
 
@@ -51,11 +52,14 @@ namespace Il2CppBridge
         void* tmpUguiDirty[2] = {};
         size_t tmpUguiDirtyCount = 0;
 
-        // 路径查找兜底（4.5.0 旧方式）。候选多命中，运行时探测后缓存真身。
+        // 路径查找兜底（4.5.0 旧方式）。候选多命中，按 Find / GetComponent
+        // 的相对距离动态配对后缓存；未配到就禁用兜底，不调用任何候选。
         void* findCandidates[kMaxPathCandidates] = {};
         size_t findCandidateCount = 0;
         void* getComponentCandidates[kMaxPathCandidates] = {};
         size_t getComponentCandidateCount = 0;
+        void* pathFind = nullptr;
+        void* pathGetComponent = nullptr;
     };
 
     /// <summary>定位结果，用于宿主错误码分级。</summary>
@@ -123,15 +127,14 @@ namespace Il2CppBridge
     /// 命中后直接写 Graphic.m_Color.a，对组件类型免疫 —— 无论水印是 Text、TMP 还是
     /// Image / Sprite，只要挂在节点上就能抓到，是文本识别失效时的兜底路径。
     ///
-    /// Find / GetComponent 的候选天然多命中，但**只调用文档记录的那个 Find 下标**
-    /// （见 kPreferredFindIndex）：其余命中是无关的 il2cpp icall 桩，逐个硬试会误调
-    /// 有副作用的函数（4.6 实测：开启遮挡 UID 后打开背包出问题）。GetComponent 候选
-    /// 在有效 GameObject 上试，用类名或对象头 + m_Color 校验挑真身，成功后缓存。
-    /// 路径当前不存在或探测失败返回 nullptr，下次仍会重试。
+    /// Find / GetComponent 的候选天然多命中，但两者在模块内的相对距离固定，
+    /// 按这一对结构关系动态配对；配不到就禁用兜底，绝不逐个候选硬试 —— 那些命中
+    /// 大多是无关的 il2cpp icall 桩，硬试会误调有副作用的函数。
+    /// 路径当前不存在时返回 nullptr，下次仍会重试。
     /// 所有游戏调用都用 SEH 包住，绝不把异常抛回 Hook。
     /// </summary>
     void* FindGraphicByPath(const char* path);
 
-    /// <summary>路径查找是否已探测到有效的 Find / GetComponent（供状态上报）。</summary>
+    /// <summary>路径查找是否已配到有效的 Find / GetComponent（供状态上报）。</summary>
     bool IsPathLookupReady();
 }

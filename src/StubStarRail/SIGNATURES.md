@@ -42,8 +42,8 @@ IL2CPP 每次重编译都会整体平移函数 RVA，写死 RVA 必然失效。
 | `Graphic.SetVerticesDirty` | `0x1B78C0C0` | `0x1F4C79B0` | 2 / 2 | UI 重建通知；多命中，需相邻孪生校验 |
 | `TMP_Text.SetVerticesDirty` | `0x134E9970` | `0x1F2F77A0` | 1 / 1 | TMP 文本重建通知；TMP_Text 覆写了 Graphic 的实现 |
 | `TextMeshProUGUI.Dirty` | `0x134EACD0` / `0x1352A360` | `0x1F2F8A80` / `0x1F337E50` | 2 / 2 | SetVerticesDirty 与 SetMaterialDirty 同构，两个都挂 |
-| `GameObject.Find` | `0x1DEDE300` | `0x1F3C1130` | 9 / 8 | 路径查找兜底；多命中，真身由运行时探测确定 |
-| `GameObject.GetComponent` | `0x1DEDDE30` | `0x1F3C0C60` | 8 / 8 | 路径查找兜底；多命中，真身由运行时探测确定 |
+| `GameObject.Find` | `0x1DEDE300` | `0x1F3C1130` | 9 / 8 | 路径查找兜底；多命中，按相对距离动态配对 |
+| `GameObject.GetComponent` | `0x1DEDDE30` | `0x1F3C0C60` | 8 / 8 | 路径查找兜底；多命中，按相对距离动态配对 |
 
 两版 RVA 均由 `check_signatures.py` 扫描得到，与旧版 `dump.cs` 里 dump 出的 RVA
 逐条对齐；工具对两版分别运行都报告「全部目标唯一命中」。
@@ -177,15 +177,21 @@ C6 46 58 01 48 89 F1 E8 ?? ?? ?? ?? 48 8B 46 68 48 85 C0 74 ??
 两条特征码都是 IL2CPP 的 icall 转发桩（`jmp qword [rip+...]` / `mov rax,[rip]; jmp rax`），
 模块里天然多命中：Find 旧版 9 / 新版 8 处，GetComponent 两版各 8 处。多出来的命中
 大多是无关函数，**逐个候选硬试会误触发副作用**（4.6 实测：开启遮挡 UID 后打开任意
-页面出问题、转视角卡顿），因此运行时不再遍历：
+页面出问题、转视角卡顿）。
 
-- `Find` 只调用文档记录的那个下标（`Il2CppBridge::kPreferredFindIndex` = 第 4 个命中；
-  4.5.0 与 4.6 都是它），其余候选一概不碰；
-- `GetComponent` 在有效 `GameObject` 上试，用返回值类名含 `Graphic`，或（类名读不到时）
-  对象头可读 + `m_Color` 四分量都落在 `[0,1]` 来挑真身。
+两版实测 `GameObject.Find(string)` 与 `GameObject.GetComponent(string)` 的相对距离
+都是 `0x4D0`，但两者在各自候选集合里的序号会变（Find 两版都是第 4 个；GetComponent
+旧版第 1 个、新版第 3 个）。运行时因此按「地址差 `0x4D0`」配对：
 
-确认后缓存地址，之后只用缓存地址；全部游戏调用都套 SEH，路径当前不存在时返回空、
-下次继续重试。
+- 候选集合里恰好只有一对满足该距离时才采用；
+- 配对失败 / 出现多对时保持禁用，不调用任何候选；
+- 配对成功后只调用这一对真身，返回对象再用对象头 + `m_Color` 四分量做一次校验。
+
+路径查找隐藏和关闭还原后，都会主动调用 MinHook 保存的原版
+`Graphic.SetVerticesDirty` 跳板标脏。主界面 UID 不会随开关自动重建文本，只写
+`m_Color.a` 不会刷新已生成的网格；标脏后才会立即隐藏 / 恢复。
+
+全部游戏调用都套 SEH，路径当前不存在时返回空、下次继续重试。
 
 ## 三、新增 / 更新特征码的落地步骤
 

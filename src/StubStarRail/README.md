@@ -120,12 +120,12 @@ Sprite 都可能），二是运行时动态创建的文本组件。任何单一�
 `GameObject.Find` / `GameObject.GetComponent(string)` 的特征码是 IL2CPP 的 icall
 转发桩，模块里天然多命中（Find 旧版 9 / 新版 8 处，GetComponent 两版各 8 处）。
 **不能逐个候选硬试**：多出来的命中大多是无关函数，反复调用会误触发副作用
-（4.6 实测：开启遮挡 UID 后打开任意页面出问题、转视角卡顿）。因此：
+（4.6 实测：开启遮挡 UID 后打开任意页面出问题、转视角卡顿）。
 
-- `Find` 只调用文档记录的那个下标（`Il2CppBridge::kPreferredFindIndex`，4.5.0 与
-  4.6 都是第 4 个命中），不再遍历；
-- `GetComponent` 在有效 `GameObject` 上试，用类名（含 `Graphic`）或对象头 + `m_Color`
-  四分量合法来挑真身，确认后缓存。
+两者的相对距离在 4.5.0 与 4.6 都是固定的 `0x4D0`，因此 `Il2CppBridge` 在候选集合里
+按这一对结构关系动态配对：只有同时满足「地址差 `0x4D0`」且唯一的一对才会被采用，
+配不到就禁用兜底，不调用任何候选。配对后只调用这一对真身；返回值再用对象头 +
+`m_Color` 四分量做一次存活校验。
 
 全部调用都套 SEH；路径当前不存在就下次重试。
 
@@ -142,7 +142,7 @@ Sprite 都可能），二是运行时动态创建的文本组件。任何单一�
      `SetMaterialDirty` 编译成了同样的指令序列，静态无法区分，两个都挂）；
 2. **不按类名过滤**：4.6 起 `ObjectClassName` 对部分对象返回 null，「拿不到类名就
    跳过」会让识别彻底失效；而且读类名每次要做几次 `VirtualQuery`，放在
-   `SetVerticesDirty` 热路径会拖慢 UI。直接按文本字段判定，命中后才读类名写诊断；
+   `SetVerticesDirty` 热路径会拖慢 UI。直接按文本字段判定，命中后直接改 alpha；
 3. 同时尝试两个文本字段偏移，取真正是 il2cpp string 的那个：
    - `UnityEngine.UI.Text.m_Text` `+0xF8`（dump.cs 实测）；
    - `TMPro.TMP_Text.m_text` `+0xF0`（dump.cs 实测）；
@@ -156,17 +156,22 @@ Sprite 都可能），二是运行时动态创建的文本组件。任何单一�
    `+0x20+0x0C`），并记录原值以便关闭开关时还原。
 
 `RPGApplication.OnUpdate` 只作为主线程入口做路径查找、关闭时的还原与状态上报。
-所有读写都先做可读 / 可写校验再套 SEH；还原前重新校验类名，避免对象被 GC 回收后
-误写无关对象。状态位 `IpcHideUidState::PathReady` 反映路径查找是否已探测到有效
-入口，便于 Host 区分「两条路都就绪」与「只有文本识别就绪」。
+所有读写都先做可读 / 可写校验再套 SEH；还原前校验对象头 `klass` 可读，避免对象被
+GC 回收后误写无关对象。路径查找隐藏和关闭还原后都会主动调用原版
+`Graphic.SetVerticesDirty` 标脏重建 —— 主界面 UID 不会因开关变化自动重建文本，
+只改 `m_Color.a` 不会刷新已生成的网格。开关刚打开时还会立即跑一次路径查找，
+所以主界面不需要切页面就能实时隐藏 / 恢复。状态位 `IpcHideUidState::PathReady`
+反映路径查找是否已配到有效入口，便于 Host 区分「两条路都就绪」与「只有文本识别就绪」。
 
 不要用「关掉 `s_UICamera`」那种做法（Pipsi 的 `hide_ui.cpp`）：会把整个 HUD 一起藏掉。
 
 ### 4.6 适配记录
 
 4.6 上 `ObjectClassName` 对部分对象返回 null，路径查找的多候选硬试还会误调无关的
-il2cpp 函数（表现为「开关已开但水印还在」+ 开任意页面出问题 / 转视角卡顿）。适配
-时曾临时加过 `starrail-stub-diag.log` 运行时日志（`[resolve]` / `[path]` /
+il2cpp 函数（表现为「开关已开但水印还在」+ 开任意页面出问题 / 转视角卡顿）。
+最终改为按 `Find` / `GetComponent` 的固定相对距离配对，并且只调用这一对真身；
+路径查找隐藏和关闭还原后主动标脏重建，解决主界面不刷新、要切页面才生效的问题。
+适配时曾临时加过 `starrail-stub-diag.log` 运行时日志（`[resolve]` / `[path]` /
 `[graphic]` / `[uid]` 等），问题定位并修好后已随本次收尾一并移除。
 
 ## 六、功能 2 / 3：两项反虚化

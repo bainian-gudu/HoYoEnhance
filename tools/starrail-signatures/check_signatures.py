@@ -16,7 +16,8 @@
     python3 tools/starrail-signatures/check_signatures.py \
         --verify-source src/StubStarRail/Il2CppBridge.cpp
 
-输出：每个目标在新版上的命中数、命中 RVA；0 命中时给出相似度最高的候选。
+输出：每个目标在新版上的命中数、命中 RVA；路径查找的 Find / GetComponent 配对；
+0 命中时给出相似度最高的候选。
 --verify-source 只比对 C++ 源码与本工具的特征码是否一致，不扫描 DLL。
 """
 
@@ -145,6 +146,10 @@ CPP_PATTERN_CONSTANTS: dict[str, str] = {
     "GameObject.GetComponent": "kGetComponentStringPattern",
 }
 CPP_TWIN_CONSTANT = "kGraphicSetLayoutDirtyTwinPattern"
+
+# GameObject.Find(string) 与 GameObject.GetComponent(string) 的固定相对距离。
+# 两个 icall 转发桩特征码都天然多命中，运行时按这一对结构关系动态配对。
+PATH_LOOKUP_PAIR_DISTANCE = 0x4D0
 
 
 # --------------------------------------------------------------------------
@@ -384,6 +389,32 @@ def main() -> int:
                 print(
                     f"{'':30s} sim={ratio:.3f} ({matched} 字节) RVA={hex(rva) if rva else '?'}"
                 )
+
+    find_sig = next(sig for sig in SIGNATURES if sig.name == "GameObject.Find")
+    get_component_sig = next(
+        sig for sig in SIGNATURES if sig.name == "GameObject.GetComponent"
+    )
+    find_rvas, _ = resolve(target, find_sig)
+    get_component_rvas, _ = resolve(target, get_component_sig)
+    pairs = [
+        (find_rva, get_component_rva)
+        for find_rva in find_rvas
+        for get_component_rva in get_component_rvas
+        if find_rva > get_component_rva
+        and find_rva - get_component_rva == PATH_LOOKUP_PAIR_DISTANCE
+    ]
+    if len(pairs) == 1:
+        find_rva, get_component_rva = pairs[0]
+        print(
+            f"路径查找配对                唯一配对      {hex(find_rva)} / "
+            f"{hex(get_component_rva)}  距离 0x{PATH_LOOKUP_PAIR_DISTANCE:X}"
+        )
+    else:
+        failures += 1
+        print(
+            f"路径查找配对                配对异常      {len(pairs)} 对  "
+            f"距离 0x{PATH_LOOKUP_PAIR_DISTANCE:X}"
+        )
 
     print("-" * 96)
     print("全部目标唯一命中。" if failures == 0 else f"{failures} 个目标需要重新推导特征码。")

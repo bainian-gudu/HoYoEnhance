@@ -116,15 +116,15 @@ namespace
     // GameObject.Find(string)（路径查找兜底，4.5.0 旧方式）
     //   4.5.0  第 4 个命中 = 0x1DEDE300
     //   2026-09-28 第 4 个命中 = 0x1F3C1130
-    // 两版都命中 8~9 处，且「第几个」不稳定（GetComponent 两版序号就不同），
-    // 因此不按序号挑，交给主线程运行时探测。
+    // 两版都命中 8~9 处；与 GetComponent(string) 的相对距离固定为 0x4D0，
+    // 因此不按序号挑，按这一对结构关系动态配对。
     constexpr const char* kGameObjectFindPattern =
         "48 FF ?? ?? ?? ?? ?? 66 0F 1F 84 00 00 00 00 00 48 83 EC 28 C7 44 24 20";
 
     // GameObject.GetComponent(string)（路径查找兜底，4.5.0 旧方式）
     //   4.5.0  第 1 个命中 = 0x1DEDDE30
     //   2026-09-28 第 3 个命中 = 0x1F3C0C60
-    // 两版都命中 8 处。同样交给运行时探测。
+    // 两版都命中 8 处；与 GameObject.Find(string) 的相对距离固定为 0x4D0。
     constexpr const char* kGetComponentStringPattern =
         "48 8B 05 ?? ?? ?? ?? 48 FF E0 66 0F 1F 44 00 00 "
         "48 8B 05 ?? ?? ?? ?? 45 31 C0 48 FF E0 0F 1F 00";
@@ -135,12 +135,11 @@ namespace
     constexpr size_t kStringLengthOffset = 0x10;      // System.String::m_Length
     constexpr size_t kStringCharsOffset = 0x14;       // System.String::m_Chars
 
-    Il2CppBridge::Functions g_functions{};
+    // GameObject.Find(string) 与 GameObject.GetComponent(string) 在模块内的固定
+    // 相对距离。两版实测都是 0x4D0，用这一对结构关系在多命中候选里动态配对。
+    constexpr uintptr_t kPathLookupPairDistance = 0x4D0;
 
-    // ---- 路径查找运行时状态（只在游戏主线程访问）--------------------------
-    void* g_findResolved = nullptr;          // 探测确定的 GameObject.Find
-    void* g_getComponentResolved = nullptr;  // 探测确定的 GameObject.GetComponent(string)
-    bool g_pathLookupProbed = false;         // 是否已成功探测（成功后才置位）
+    Il2CppBridge::Functions g_functions{};
 
     // 自建 IL2CPP 字符串：星铁没有可用的 il2cpp_string_new 导出，参考实现同样
     // 手工拼 length + chars。只在 Find / GetComponent 调用期间有效，调用后立即
@@ -393,7 +392,7 @@ namespace
 
     /// <summary>
     /// 收集多命中目标的全部候选，过滤掉模块外 / 不可执行的项。
-    /// 候选的真身由主线程运行时探测决定（见 FindGraphicByPath）。
+    /// Find / GetComponent 的真身按固定相对距离配对（见 ResolvePathLookupPair）。
     /// </summary>
     void CollectCandidates(HMODULE module, const char* pattern, void** out, size_t& count,
                            size_t capacity)
@@ -416,6 +415,47 @@ namespace
                 out[count++] = hit;
             }
         }
+    }
+
+    /// <summary>
+    /// 在多命中候选里按固定相对距离配对 GameObject.Find(string) 与
+    /// GameObject.GetComponent(string)。两版实测只有这一对满足 0x4D0，且序号会变，
+    /// 所以不使用命中下标；配不到就保持禁用，绝不调用候选。
+    /// </summary>
+    bool ResolvePathLookupPair(Il2CppBridge::Functions& out)
+    {
+        void* find = nullptr;
+        void* getComponent = nullptr;
+
+        for (size_t f = 0; f < out.findCandidateCount; ++f)
+        {
+            const uintptr_t findAddress = reinterpret_cast<uintptr_t>(out.findCandidates[f]);
+            for (size_t g = 0; g < out.getComponentCandidateCount; ++g)
+            {
+                const uintptr_t getComponentAddress =
+                    reinterpret_cast<uintptr_t>(out.getComponentCandidates[g]);
+                if (findAddress <= getComponentAddress ||
+                    findAddress - getComponentAddress != kPathLookupPairDistance)
+                {
+                    continue;
+                }
+
+                if (find)
+                {
+                    return false; // 多于一对满足 → 结构关系不够独特，宁可禁用
+                }
+                find = out.findCandidates[f];
+                getComponent = out.getComponentCandidates[g];
+            }
+        }
+
+        if (!find || !getComponent)
+        {
+            return false;
+        }
+        out.pathFind = find;
+        out.pathGetComponent = getComponent;
+        return true;
     }
 }
 
@@ -485,11 +525,12 @@ namespace Il2CppBridge
             }
         }
 
-        // 路径查找兜底（4.5.0 旧方式）：候选多命中，真身由主线程探测。
+        // 路径查找兜底（4.5.0 旧方式）：候选多命中，按固定相对距离配对真身。
         CollectCandidates(gameAssembly, kGameObjectFindPattern, out.findCandidates,
                           out.findCandidateCount, kMaxPathCandidates);
         CollectCandidates(gameAssembly, kGetComponentStringPattern, out.getComponentCandidates,
                           out.getComponentCandidateCount, kMaxPathCandidates);
+        ResolvePathLookupPair(out);
 
         g_functions = out;
         return ResolveStatus::Ok;
@@ -657,30 +698,20 @@ namespace Il2CppBridge
     }
 
     // UnityEngine.UI.Graphic.m_Color：RGBA 四个 float（分量在 [0,1]）。
-    // 类名读不到时用它做兜底校验，见 IsPlausibleGraphic。
+    // 路径查找的返回值用它做存活 / 布局校验，见 IsPlausibleGraphic。
     constexpr size_t kGraphicColorOffset = 0x20;
-
-    // GameObject.Find 在 kGameObjectFindPattern 命中集合里的下标。
-    //   4.5.0        第 4 个命中 = 0x1DEDE300
-    //   2026-09-28   第 4 个命中 = 0x1F3C1130
-    // 4.6 实测同样是第 4 个命中。
-    // 只信这一个下标：其余命中是无关的 il2cpp icall 桩，逐个硬试会调用到有副作用的
-    // 函数（4.6 实测：开启遮挡 UID 后打开背包出问题、转视角卡顿）。下标失效时最多是
-    // 「这次不隐藏」，绝不去调其它函数。
-    constexpr size_t kPreferredFindIndex = 3;
 
     /// <summary>
     /// 一个指针是否像 UnityEngine.UI.Graphic。
-    /// 首选类名含 "Graphic"；类名读得到但不是 Graphic 时明确排除；类名读不到
-    /// （4.6 实测 ObjectClassName 对部分候选返回 null）时退回校验对象头 + m_Color：
-    /// 先确认是 IL2CPP 对象（klass 可读），再要求四个颜色分量都能读成 [0,1] 的 float。
+    /// 这里只看 IL2CPP 对象头 + m_Color：具体的 UID 节点是 UnityEngine.UI.Text /
+    /// TMPro.TextMeshProUGUI 等 Graphic 子类，类名并不含 "Graphic"，不能用类名过滤。
+    /// 先确认 klass 可读，再要求四个颜色分量都能读成 [0,1] 的 float。
     /// </summary>
     bool IsPlausibleGraphic(const void* graphic)
     {
-        const char* name = ObjectClassName(graphic);
-        if (name)
+        if (!graphic)
         {
-            return std::strstr(name, "Graphic") != nullptr;
+            return false;
         }
 
         void* klass = nullptr;
@@ -710,8 +741,7 @@ namespace Il2CppBridge
     void* FindGraphicByPath(const char* path)
     {
         const Functions& functions = g_functions;
-        if (!path || functions.findCandidateCount == 0 ||
-            functions.getComponentCandidateCount == 0)
+        if (!path || !functions.pathFind || !functions.pathGetComponent)
         {
             return nullptr;
         }
@@ -722,28 +752,10 @@ namespace Il2CppBridge
             return nullptr;
         }
 
-        // 探测成功后只用缓存的真身，避免每次把全部候选都调一遍。
-        if (g_pathLookupProbed)
+        void* gameObject = CallFindRaw(functions.pathFind, pathString.Get());
+        if (!gameObject)
         {
-            void* gameObject = CallFindRaw(g_findResolved, pathString.Get());
-            if (!gameObject)
-            {
-                return nullptr;
-            }
-            ScopedIl2CppString graphicName("UnityEngine.UI.Graphic");
-            if (!graphicName.Valid())
-            {
-                return nullptr;
-            }
-            return CallGetComponentRaw(g_getComponentResolved, gameObject, graphicName.Get());
-        }
-
-        // 未探测：只调用文档记录的 Find 候选（kPreferredFindIndex），拿到 GameObject
-        // 后再在有效对象上试 GetComponent 候选（用类名或 m_Color 校验挑真身）。
-        // 不再遍历 Find 候选：那些 icall 桩里多数不是 GameObject.Find，硬试会误调
-        // 有副作用的函数。
-        if (functions.findCandidateCount <= kPreferredFindIndex)
-        {
+            // 路径当前不存在（UI 尚未加载 / 该界面未打开），下次再试。
             return nullptr;
         }
 
@@ -753,34 +765,14 @@ namespace Il2CppBridge
             return nullptr;
         }
 
-        void* findCandidate = functions.findCandidates[kPreferredFindIndex];
-        void* gameObject = CallFindRaw(findCandidate, pathString.Get());
-        if (!gameObject)
-        {
-            // 路径当前不存在（UI 尚未加载 / 该界面未打开），下次再试。
-            return nullptr;
-        }
-
-        for (size_t g = 0; g < functions.getComponentCandidateCount; ++g)
-        {
-            void* getComponentCandidate = functions.getComponentCandidates[g];
-            void* graphic = CallGetComponentRaw(getComponentCandidate, gameObject, graphicName.Get());
-            if (!graphic || !IsPlausibleGraphic(graphic))
-            {
-                continue;
-            }
-
-            g_findResolved = findCandidate;
-            g_getComponentResolved = getComponentCandidate;
-            g_pathLookupProbed = true;
-            return graphic;
-        }
-        return nullptr;
+        void* graphic =
+            CallGetComponentRaw(functions.pathGetComponent, gameObject, graphicName.Get());
+        return IsPlausibleGraphic(graphic) ? graphic : nullptr;
     }
 
     bool IsPathLookupReady()
     {
-        return g_pathLookupProbed;
+        return g_functions.pathFind != nullptr && g_functions.pathGetComponent != nullptr;
     }
 
     const Functions& Resolved()
