@@ -28,8 +28,7 @@
   **.NET Desktop Runtime 9** 与 **VC++ 2015+ x64** 由安装器按配置检测/安装
   （亦可首次运行时由主程序提示下载）。**不需要** Node / Python 等开发运行时，
   逐项见下文「依赖说明」。
-- **构建**：.NET 9 SDK、CMake、MSVC（或 VS Build Tools）、Node.js 20+；
-  打安装器另需 Rust nightly + `rust-src` 与 pnpm 10（源码随仓库提供，CI 会自动装）。
+- **构建**：.NET 9 SDK、CMake、MSVC（或 VS Build Tools）、Node.js 20+。
 
 ## 快速使用
 
@@ -50,8 +49,7 @@
 | WebView2 契约 | C# DTO → TypeScript 生成 | `src/Contracts/` 是桥接配置的唯一事实来源；`tools/contract-gen/` 生成 `src/Ui/src/lib/bridge.generated.ts`，devcheck 强制两端同步 |
 | Web UI | React 19 + TypeScript 5.9 + Vite 7 + Tailwind CSS 4 + framer-motion + lucide-react | `src/Ui/`：设计稿由 **gpt-6-astra-max** 设计、按稿 1:1 实现；`vite-plugin-singlefile` 打成单文件 `ui/index.html` |
 | 注入模块 | C++20（CMake）+ MinHook（BSD-2-Clause），CRT 静态链接（`/MT`） | `src/Stub/`：原神的帧率解锁与反虚化；`src/StubStarRail/`：星铁的反角色虚化与隐藏 UID（`StarRailStub.dll`，帧率仍走注册表）；两者只共用 `src/Common/` 的扫描器与 IPC 协议，业务代码相互独立 |
-| 安装 / 卸载 / 更新器 | Kachina：Rust + Tauri 2（nightly + `-Z build-std`）+ Vue 3.5 + Rsbuild | 独立项目 [Kirara](https://github.com/bainian-gudu/Kirara)：上游源码快照（tag `0.5.1`）+ 本地修改，产出 `kirara-builder.exe`；本仓库 CI 直接取它的最新 Release 产物 |
-| exe 图标 / 版本资源写入 | vendored `rcedit-rs`（C++，MSVC 编译） | Kirara 的 `vendor/rcedit-rs/`，与上游差异见其 `LOCAL_PATCHES.md` |
+| 安装 / 卸载 / 更新器 | 独立项目 [Kirara](https://github.com/bainian-gudu/Kirara) 的 `kirara-builder` 产物 | 本仓库只提供 `packaging/` 的安装包配置与打包脚本 |
 | 构建 / 打包 / 自检 | PowerShell 7 | `build.ps1`、`packaging/pack.ps1`、`tools/devcheck/` |
 | CI | GitHub Actions（`ubuntu-latest` + `windows-latest`） | `devcheck.yml`（push/PR 自动）、`build.yml`（仅手动） |
 
@@ -59,7 +57,7 @@
 
 默认构建主程序和安装器。安装器由独立项目 Kirara 产出的 `kirara-builder.exe` 生成：
 本地构建默认按需从 Kirara 源码构建，CI 直接下载它的最新 Release 产物。本仓库的
-打包配置与脚本集中在 [`packaging/`](packaging/)。
+打包配置与脚本集中在 [`packaging/`](packaging/)，工具链本身见 Kirara 的 `README.md`。
 
 > 说明：当前主程序、安装包、便携包、快捷方式、界面与窗口标题统一为 **HoYoEnhance**。
 > 为兼容老用户升级与卸载，数据目录、卸载注册表键、IPC / 自启动任务等内部标识仍保留
@@ -71,7 +69,7 @@
 # 仅编译 UI + Stub + 主程序（不打包）
 .\build.ps1 -Configuration Release -SkipSetup
 
-# 完整：编译 + 打包 Kachina 离线安装器（首次会调 Kirara 的 build.ps1）
+# 完整：编译 + 打包离线安装器（首次会按需构建 Kirara 的 kirara-builder）
 .\build.ps1 -Configuration Release
 
 # 只重新打包（dist\ 已存在）
@@ -85,11 +83,8 @@
 .\build.ps1 -Configuration Release -SelfContained
 ```
 
-只修改前端时可在 `src/Ui` 执行 `npm ci` 后运行 `npm run build`；只修改安装器前端时，
-在 Kirara 仓库根执行 `pnpm install --frozen-lockfile` 后运行 `pnpm exec rsbuild build`。
-
-本仓库的打包流程与配置项见 [`packaging/README.md`](packaging/README.md)；
-安装器源码、依赖与构建步骤见 Kirara 的 `README.md`。
+只修改前端时可在 `src/Ui` 执行 `npm ci` 后运行 `npm run build`。
+本仓库的打包流程与配置项见 [`packaging/README.md`](packaging/README.md)。
 
 产物：
 
@@ -99,18 +94,16 @@ dist\FpsUnlockerStub.dll
 dist\StarRailStub.dll
 dist\ui\index.html
 
-artifacts\HoYoEnhance.Install.<版本>.exe              # Kachina 离线安装器
+artifacts\HoYoEnhance.Install.<版本>.exe              # 离线安装器
 artifacts\HoYoEnhance-portable-win-x64.zip            # 便携包（含更新程序）
 artifacts\HoYoEnhance_v<版本>.7z                      # 便携 7z（本机有 7-Zip 时）
 ```
 
 打包配置见 [`packaging/packaging.config.json`](packaging/packaging.config.json)
 （默认安装目录、GitHub 在线源、运行库列表）。
-上游源码快照的来源、版本与构建前置见 Kirara 的 `UPSTREAM.md`。
 
 ## 开发自检（devcheck）
 
-安装器工具链（Kirara）是 Tauri + Windows 专用项目，完整构建一次要几分钟；
 本仓库的 `tools/devcheck` 把**我们真正改过的那部分**（Web UI + Stub + Host + 打包配置）
 放进最小依赖的检查环境，热跑 5–10 秒。
 
@@ -126,8 +119,8 @@ pwsh tools/devcheck/devcheck.ps1 -SelfTest       # 注入错误，确认每层�
 
 ## 安装、更新与卸载
 
-安装与卸载**只有 Kachina 一种实现**。主程序自身不做任何安装/卸载动作：文件与注册表
-都由 Kachina 的 `uninst.exe` 处理，程序内的「卸载本软件」按钮只负责**拉起**它
+安装与卸载由安装包自带的安装器完成。主程序自身不做任何安装 / 卸载动作：文件与注册表
+都由 `uninst.exe` 处理，程序内的「卸载本软件」按钮只负责**拉起**它
 （入口：设置页「高级设置 → 卸载」、关于页底部）。
 
 ```powershell
@@ -142,13 +135,13 @@ pwsh tools/devcheck/devcheck.ps1 -SelfTest       # 注入错误，确认每层�
 - 安装界面「我已阅读并同意 **用户协议**」可点击，弹窗显示协议全文；配了协议就
   **必须勾选同意**才能点安装，正文里的外链交给系统浏览器打开，不会把安装器窗口导航走
 
-卸载（四个入口，最终都是同一个 Kachina 卸载器）：
+卸载（四个入口，最终都是同一个卸载器）：
 
 - 程序内：设置页「高级设置 → 卸载 → 卸载本软件」，或关于页底部的「卸载本软件」
   （弹窗确认后拉起 `uninst.exe` 并退出主程序；便携版没有 `uninst.exe`，会提示直接删目录）
 - 安装目录下的 **卸载程序**
 - 开始菜单里的「Uninstall HoYoEnhance」快捷方式（指向上面那个程序；便携目录没有卸载程序时不再创建）
-- Windows「设置 → 应用 → 安装的应用」/ 控制面板「应用和功能」（Kachina 写的 ARP 卸载项）
+- Windows「设置 → 应用 → 安装的应用」/ 控制面板「应用和功能」（安装器写的 ARP 卸载项）
 
 卸载时会一并处理：
 
@@ -164,8 +157,7 @@ pwsh tools/devcheck/devcheck.ps1 -SelfTest       # 注入错误，确认每层�
   不碰盘符根与 `Program Files` 这类受保护目录），命中的只记日志并跳过，不会让卸载失败。
 
 已知边界：被 OneDrive 重定向过的 `文档` / `AppData` 只能命中当前用户那一份。
-逐条实现与断言见 Kirara 的 `LOCAL_PATCHES.md` 第 3、6 节与
-[`packaging/README.md`](packaging/README.md)。
+打包配置见 [`packaging/README.md`](packaging/README.md)。
 
 在线更新：已安装副本可使用安装目录中的更新程序，从配置的 GitHub Release 源拉取（需已发布对应安装包）。
 
@@ -175,7 +167,7 @@ pwsh tools/devcheck/devcheck.ps1 -SelfTest       # 注入错误，确认每层�
 |------|----------|
 | 应用托管程序集 / 资源 | 打进安装包 |
 | `FpsUnlockerStub.dll` / `StarRailStub.dll` + MinHook | 打进安装包；CRT **静态链接**（/MT） |
-| 安装器 / 卸载器 / 更新器 | **Kachina**（`Install` / `uninst` / `update`） |
+| 安装器 / 卸载器 / 更新器 | 安装包自带（`Install` / `uninst` / `update`） |
 | .NET Desktop Runtime 9 x64 | 安装器 `runtimes`；亦可首次运行提示 |
 | VC++ 2015+ x64 | 安装器 `runtimes`（通常 Stub 已静态 CRT） |
 | Node / Python 等 | **不需要、不安装** |
@@ -223,8 +215,8 @@ pwsh tools/devcheck/devcheck.ps1 -SelfTest       # 注入错误，确认每层�
   FpsUnlockerStub.dll
   StarRailStub.dll
   ui\index.html                   # Web UI（WebView2 加载）
-  <卸载程序>.exe                   # Kachina 卸载
-  <更新程序>.exe                   # Kachina 更新（可选）
+  <卸载程序>.exe                   # 卸载
+  <更新程序>.exe                   # 更新（可选）
 
 {用户数据目录}\
   config.json
@@ -242,9 +234,7 @@ pwsh tools/devcheck/devcheck.ps1 -SelfTest       # 注入错误，确认每层�
 
 CI 的安装器工具链**只从独立项目 Kirara 的最新 Release 下载** `kirara-builder.exe`
 （Kirara 自己的发布流程负责从源码构建并挂出产物）；本仓库 CI 不再检出 Kirara 源码、
-也不再现场编译 Rust。本地开发仍可按需调用 Kirara 的 `build.ps1`。这条约束由 devcheck
-的 `vendor` 层自动断言，细节见 Kirara 的 `UPSTREAM.md` 与
-[`tools/devcheck/README.md`](tools/devcheck/README.md)。
+也不再现场编译 Rust。这条约束由 devcheck 的 `vendor` 层自动断言。
 
 **Build** 依次跑 `build-builder`（下载 Kirara 最新 Release 的 `kirara-builder.exe`）→
 `build-app` → `pack` → `package-e2e`，可选 `host_mode=self-contained` 打全量自包含
@@ -258,14 +248,8 @@ CI 的安装器工具链**只从独立项目 Kirara 的最新 Release 下载** `
 **本软件不含任何遥测**：不收集使用统计、不上报崩溃与错误、不生成设备标识。
 
 安装器基于上游 [YuehaiTeam/kachina-installer](https://github.com/YuehaiTeam/kachina-installer)，
-上游自带两条外发通道。本项目已把它们**连依赖一起物理移除**——不是运行时关开关，
-也不是把地址置空，而是编译产物里连上报地址字符串都不残留：
-
-| 上游通道 | 原来的行为 | 本项目 |
-| --- | --- | --- |
-| Sentry 错误上报 | Rust 侧把 anyhow 错误连同环境信息（用户名 / 主机名 / 系统版本）上报到 `steambird.cocogoat.cn` | `sentry` / `sentry-tracing` / `whoami` 依赖与全部调用点删除，`utils/sentry.rs` 整份删除；错误只进本地日志文件 |
-| 使用统计 | 前端 `sendInsight()` 往 `77.cocogoat.cn/ev` POST 安装 / 完成 / 升级 / 卸载 / 启动 / 出错事件（含屏幕分辨率、系统语言、安装源 id） | 函数与 6 处调用全部删除 |
-| 构建期 | `@sentry/cli`（装包时 postinstall 下载 sentry-cli 二进制，用于上传 sourcemap） | 依赖与 `pnpm-workspace.yaml` 白名单一并删除 |
+上游自带错误上报与使用统计两条外发通道。本项目已把它们**连依赖一起物理移除**——
+不是运行时关开关，也不是把地址置空，而是编译产物里连上报地址字符串都不残留。
 
 仍然会发生的网络请求（都是功能本身，且由您触发）：
 
@@ -277,10 +261,6 @@ CI 的安装器工具链**只从独立项目 Kirara 的最新 Release 下载** `
 - **主程序运行期不联网**：帧率解锁与画面注入全部在本地完成；检测到缺运行库时只弹
   提示，经确认后用系统浏览器打开微软官方下载页（`src/Host/RuntimePrerequisite.cs`）。
 - 本地日志与配置写在用户数据目录，不上传。
-
-删除清单、保留项（`InfoFilter`、本地耗时统计 `networkInsights.ts`）与 lock 重新生成的
-细节见 Kirara 的 `LOCAL_PATCHES.md` 第 7 节；Kirara 的 `tools/devcheck` `vendor` 层第 8 组
-断言会在遥测被加回来时直接失败（含 3 个自检注入）。
 
 ## 用户协议与安全说明
 
@@ -307,7 +287,6 @@ CI 的安装器工具链**只从独立项目 Kirara 的最新 Release 下载** `
   验证微软签名 —— 签名无效或签名者不是微软就删掉文件并提示手动下载。
 - **安装器与提权进程之间的通道**：只允许本用户、SYSTEM 与管理员访问，其他本地程序
   （包括沙箱进程）连不进来。
-- 逐条实现记录（面向开发者）见 Kirara 的 `LOCAL_PATCHES.md`。
 
 ## 参考、素材与版权
 
@@ -318,12 +297,11 @@ CI 的安装器工具链**只从独立项目 Kirara 的最新 Release 下载** `
   [DGP Studio 的 Snap.Hutao.Remastered.UnlockerIsland](https://github.com/SnapHutaoRemasteringProject/Snap.Hutao.Remastered.UnlockerIsland)（MIT），
   已改编为特征码自适配扫描并整合进 `src/Stub/AntiBlur.cpp` 与 `src/Stub/HideUid.cpp`。
 - 安装 / 卸载 / 更新器整体方案来自 [YuehaiTeam/kachina-installer](https://github.com/YuehaiTeam/kachina-installer)
-  （源码快照在独立项目 [Kirara](https://github.com/bainian-gudu/Kirara)，
-  版本与来源见其 `UPSTREAM.md`）。
+  （源码快照在独立项目 [Kirara](https://github.com/bainian-gudu/Kirara)）。
 - 应用图标等图片素材取自 [babalae/better-genshin-impact](https://github.com/babalae/better-genshin-impact)
   （GPL-3.0），逐文件路径见下文「图片与素材来源」。
 - 其余实现层面的参考（上游 issue、MSVC/Windows 行为变更等）一律记在对应目录的
-  `LOCAL_PATCHES.md` / `tools/devcheck/README.md` 里，代码注释只留一句指针。
+  `tools/devcheck/README.md` 里，代码注释只留一句指针。
 
 ### 图片与素材来源
 
@@ -350,7 +328,7 @@ CI 的安装器工具链**只从独立项目 Kirara 的最新 Release 下载** `
 > 注 1：除 `favicon.svg`（本项目手写）与 gpt-6-astra-max 生成的横幅外，仓库内所有图片都与
 > 上游 kachina 快照或 BetterGI 仓库中的某个文件**逐字节相同**（核对方式：`md5sum`，
 > 路径见上表「来源」列）。BetterGI 以 **GPL-3.0** 发布，这些素材**不随本项目的
-> MIT 许可再授权**；升级上游 kachina 时按 Kirara 的 `UPSTREAM.md` 一起更新。
+> MIT 许可再授权**。
 > 注 2：凡涉及《原神》《崩坏：星穹铁道》角色、官方图标或美术风格的素材，若权利人提出
 > 异议，将从仓库中移除并替换；版权归属见下文「商标与作品归属」。
 

@@ -1,34 +1,25 @@
 # packaging/ — 安装包配置与打包脚本
 
-本项目的安装 / 卸载 / 更新**只有 Kachina 一种实现**。宿主程序（`src/Host`）本身不动
-文件与注册表，收到 `--install` / `--uninstall` 这类旧参数时只提示用户改用 Kachina。
-
-面向使用者只需要下载根目录 `artifacts\` 中的安装包；本目录供开发者配置和排查安装包。
-**安装器工具链不在这里**：上游 [kachina-installer](https://github.com/YuehaiTeam/kachina-installer)
-的源码快照 + 本地补丁 + `kirara-builder` 都在独立项目
-[Kirara](https://github.com/bainian-gudu/Kirara)（默认取同级目录 `..\Kirara`）。
+本目录只放「应用侧」的打包配置与入口脚本。安装器工具链在独立项目
+[Kirara](https://github.com/bainian-gudu/Kirara)：上游
+[kachina-installer](https://github.com/YuehaiTeam/kachina-installer) 的源码快照、本地
+补丁与 `kirara-builder` 都在那边，安装器的实现、构建前置与升级步骤也记在那个仓库。
 
 ```text
 packaging/
 ├── README.md               本文件
-├── packaging.config.json   Kachina 配置（安装目录、ARP 名称、运行库、协议正文、卸载时清理的数据目录与注册表）
+├── packaging.config.json   安装包配置（安装目录、ARP 名称、运行库、协议正文、界面资源、
+│                           卸载时清理的注册表 / 计划任务 / 快捷方式 / 用户数据目录）
+├── left.webp               安装界面左栏图（配置里的 imageFile）
 └── pack.ps1                打包总入口：dist\ → Install.exe / 便携 zip / 便携 7z
 ```
-
-排查时两边对照的位置：
-
-| 本仓库 | Kirara |
-| --- | --- |
-| `pack.ps1` 调用的 `kirara-builder.exe` | 它的 `build.ps1` 从 `src/`、`src-tauri/` 构建出的 `tools/kirara-builder.exe` |
-| 卸载器实际删什么、安全阀怎么判 | `src-tauri/src/installer/uninstall.rs`，逐处说明见 `LOCAL_PATCHES.md` |
-| 上游来源、版本与升级步骤 | `UPSTREAM.md`、`LOCAL_PATCHES.md` |
 
 ## 快速开始
 
 在仓库根目录执行：
 
 ```powershell
-# 仓库根目录：编译 UI + Stub + Host，再打包安装包（首次会调 Kirara 的 build.ps1）
+# 编译 UI + Stub + Host，再打包安装包
 .\build.ps1
 
 # 已经编译过、只想重新打包
@@ -38,7 +29,7 @@ packaging/
 .\build.ps1 -SkipSetup
 ```
 
-`pack.ps1` 默认到同级目录 `..\Kirara` 找工具链；Kirara 不在那里、或手上已经有现成的
+`pack.ps1` 默认到同级目录 `..\Kirara` 取 builder；Kirara 不在那里、或手上已经有现成的
 builder 时用参数指定：
 
 ```powershell
@@ -47,11 +38,7 @@ builder 时用参数指定：
 .\build.ps1 -SkipBuilderBuild                  # 不自动构建（要求默认位置已有 builder）
 ```
 
-调用 Kirara 的 `build.ps1` 时由它自己判断：builder 缺失、或源码比产物新才重建。判据是
-文件修改时间（跳过 `node_modules` / `dist` / `target` / `gen` / `.cache`），所以
-`git checkout` 触碰过的文件可能触发一次多余的重建；确定不需要时用 `-SkipBuilderBuild`。
-构建 Kirara 需要 Rust nightly（含 `rust-src`）、Node.js 20+、pnpm 10、PowerShell 7 与
-Windows MSVC / VS Build Tools，完整说明见该仓库的 `README.md`。
+CI 不检出 Kirara 源码，直接下载它的最新 Release 产物，见下「CI」。
 
 ## 产物
 
@@ -85,31 +72,14 @@ kirara-builder.exe pack -c packaging\packaging.config.json -m metadata.json -d h
 > 上述命令里的产品标识与输出文件名以 `packaging\pack.ps1`、`packaging.config.json`
 > 的实际配置为准。
 
-## Kachina 负责什么 / 不负责什么
+## 配置项
 
-Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序只负责启动卸载器，不直接
-删除安装目录或注册表。用户侧入口和数据保留规则请先看根目录 [`README.md`](../README.md)
-的「安装、更新与卸载」；本文件下面的内容主要用于维护配置和审查删除范围。
+`packaging.config.json` 是「应用侧」的唯一事实来源：安装目录、ARP 名称、运行库、协议
+正文、界面资源、卸载时要清理的注册表 / 计划任务 / 快捷方式 / 用户数据目录。下面几项
+跟着宿主行为走 —— 改了宿主就要一起改，`tools/devcheck` 的 `packaging` 层拿宿主常量
+交叉断言，漏改会直接报错。
 
-**负责**：铺文件到打包配置指定的安装目录、写「应用和功能」卸载项、
-生成 `uninst.exe` / `update.exe`、按 `runtimes` 装 .NET Desktop Runtime 9 与 VCRedist、
-按 `uacStrategy` 提权、安装时创建桌面 + 开始菜单快捷方式（安装界面有勾选项，默认勾上）、
-卸载时删除这些快捷方式、删除 ARP 注册表项，并按 `userDataPath` 清用户数据
-（配置 / 日志 / WebView2 数据，见下）。
-
-**不负责**，由宿主自己维护：
-
-| 事项 | 归属 | 说明 |
-| --- | --- | --- |
-| 快捷方式的**显示名** | `src/Core/ShortcutHelper.cs` | Kachina 按 `shortcutName` 建 `HoYoEnhance.lnk`（桌面 + 开始菜单），宿主每次启动统一主项为 `HoYoEnhance.lnk`、卸载项为 `Uninstall HoYoEnhance.lnk`，并清理重复项；卸载时由 `extraUninstallLnkNames` 补删（见下） |
-| 开机自启 | `src/Core/Autostart.cs` | 按配置项「开机自启动」+「启动时自动以管理员权限运行」同步，两种登记方式二选一：普通权限写 `HKCU\...\Run`，管理员权限登记任务计划程序里的兼容自启任务（`RunLevel=HighestAvailable`，登录不弹 UAC）。卸载时分别由 `packaging.config.json` 的 `extraUninstallRegistry` 与 `extraUninstallScheduledTasks` 交给卸载器回收（见下），不需要用户先手动关闭 |
-
-## 本项目给 Kachina 加 / 改的配置项
-
-下面几项上游都没有（`userDataPath` 上游有字段但行为有坑），改动落在 Kirara 持有的源码
-快照里，逐处说明见 Kirara 的 `LOCAL_PATCHES.md`。
-
-### `extraUninstallRegistry` — 卸载时清理安装期写入的注册表
+### `extraUninstallRegistry` — 卸载时回收宿主的开机自启值
 
 ```json
 "extraUninstallRegistry": [
@@ -121,16 +91,15 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 | --- | --- |
 | `hive` | `HKCU` / `HKLM` / `HKCR` / `HKU`（大小写不敏感，也接受全称） |
 | `key` | 子键路径 |
-| `value` | 给了就只删这一个值；省略则**递归删除整个子键**（`remove_tree`），慎用 |
+| `value` | 给了就只删这一个值；省略则删整棵子键，慎用 |
 
-本项目宿主的开机自启写在 `HKCU\...\Run` 的 `HoYoEnhance` 值上
-（`src/Core/Autostart.cs`），所以卸载必须回收它。注意卸载器一般以管理员身份运行，
-此时 `HKCU` 指向的是管理员账户；因此 `hive: HKCU` 会**额外遍历 `HKEY_USERS`**
-下已加载的用户配置单元（跳过 `*_Classes`、`.DEFAULT`、`S-1-5-18`），
-确保删掉的是登录用户装的那一份。ARP 卸载项仍由上游逻辑按 `regName` 删除，
-不要在这里重复声明。清理失败只记日志，不会中断卸载。
+宿主把普通权限的开机自启写在 `HKCU\...\Run` 的 `HoYoEnhance` 值上
+（`src/Core/Autostart.cs`），所以卸载必须回收它。卸载器通常以管理员身份运行，那时
+`HKCU` 指向的是管理员账户，因此这里声明 `HKCU` 时它会额外遍历已加载的用户配置单元，
+确保删掉的是当初装机用户的那一份。ARP 卸载项由安装器按 `regName` 自己删，不要在这里
+重复声明。
 
-### `extraUninstallScheduledTasks` — 卸载时清理安装期登记的登录计划任务
+### `extraUninstallScheduledTasks` — 卸载时回收宿主的管理员自启任务
 
 ```json
 "extraUninstallScheduledTasks": [
@@ -138,23 +107,12 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 ]
 ```
 
-「开机自启动 + 启动时自动以管理员权限运行」同时开启时，宿主不再写 `HKCU\...\Run`，
-而是在任务计划程序里登记一个最高权限登录任务（`src/Core/Autostart.cs`）。
-它不是注册表项、也不是文件，`extraUninstallRegistry` / `extraUninstallPath`
-都覆盖不到，只能靠 `schtasks /Delete /TN <名字> /F` 回收 —— 否则卸载后每次登录
-都会去拉起一个已经不存在的 exe。
+同时开「开机自启动」与「启动时自动以管理员权限运行」时，宿主改登记任务计划程序里的
+最高权限登录任务（`src/Core/Autostart.cs`）。它既不是文件也不是注册表值，只能按任务名
+回收；漏了它，卸载后每次登录都会去拉起一个已经不存在的 exe。这里填**任务名**，必须带
+产品前缀（`regName` 开头），通配符会被拒绝。
 
-| 约束 | 说明 |
-| --- | --- |
-| 填**任务名** | 不是路径。`\` 前缀（根目录）与子目录形式都当作不安全输入跳过 |
-| 必须带产品前缀 | 只放行以 `regName` 开头、且只含字母数字与 `._- `、长度 ≤ 100 的名字 |
-| 通配符一律拒绝 | 卸载器通常以管理员身份运行，`*` 会变成「删掉整台机器的任务」 |
-| 失败只记日志 | 任务不存在、权限不足、schtasks 调用失败都不会让卸载中断 |
-
-安全阀实现在 Kirara 的 `src-tauri/src/installer/uninstall.rs`（`is_safe_task_name`），
-断言见 Kirara 的 `tools/devcheck` logic 层（第 17、18 组用例）。
-
-### `extraUninstallLnkNames` — 卸载时清理宿主自建/改名的快捷方式
+### `extraUninstallLnkNames` — 卸载时回收宿主自建 / 改名的快捷方式
 
 ```json
 "extraUninstallLnkNames": [
@@ -163,63 +121,25 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 ]
 ```
 
-只写**文件名**，目录由卸载器用 shell API 解析后拼出来，四侧都试：
-公共桌面 / 用户桌面、公共开始菜单 / 用户开始菜单下的 `{appName}\` 文件夹。
-这样即使用户桌面被 OneDrive 重定向、或宿主当初写在了另一侧，也能删干净。
-完整名单以 `packaging\packaging.config.json` 为准。
-
-这些路径走的是**尽力删除**：删不掉（无权限、被占用）只写日志，
-不会把卸载判为失败——上游 `extraUninstallPath` 的语义是删不掉就报错中断，
-不适合放这种「清理不干净但不致命」的路径。
+只写**文件名**：目录由安装器按 shell 的桌面 / 开始菜单位置解析，用户桌面被 OneDrive
+重定向也能命中。完整名单以 `packaging.config.json` 为准。
 
 ### `userDataPath` — 卸载时清理用户数据（勾选后才生效）
 
 ```json
 "userDataPath": [
-  "%LOCALAPPDATA%/<用户数据目录名>",
-  "%APPDATA%/<用户数据目录名>",
-  "%USERPROFILE%/Documents/<用户数据目录名>"
+  "%LOCALAPPDATA%/HoYoEnhance",
+  "%APPDATA%/HoYoEnhance",
+  "%USERPROFILE%/Documents/HoYoEnhance"
 ]
 ```
 
-这三个目录**不是**历史遗留兜底，而是宿主当前就在用的可写性回退链：
-`src/Core/AppPaths.cs` 的 `DataDirectory` 依次尝试
-`LocalApplicationData` → `ApplicationData`(Roaming) → `MyDocuments`，
-用**第一个能创建并通过写探测的**目录（`%LOCALAPPDATA%` 被组策略 / ACL /
-漫游配置挡住时就会落到后两个）。所以卸载必须三处都试，否则换了落盘位置的
-用户数据就清不掉。不存在的目录自动跳过。
+这三条不是历史兜底，而是宿主当前就在用的回退链：`src/Core/AppPaths.cs` 依次尝试
+LocalAppData → Roaming AppData → 文档，用**第一个能创建并通过写探测的**目录。三条都
+要声明，否则换了落盘位置的用户数据清不掉。
 
-上游卸载器在这里有两个坑，Kirara 的本地补丁都填了（详见其 `LOCAL_PATCHES.md`
-第 6 节）：
-
-| 坑 | 后果 | 补丁 |
-| --- | --- | --- |
-| 配置里的 `%VAR%` **从不展开**（前端只认 `${INSTALL_PATH}` / `${APP_NAME}`） | 字面量 `%LOCALAPPDATA%/...` 不是绝对路径，被删除安全阀当成「不安全路径」静默跳过——**勾了也不会删** | 卸载器在安全检查之前先展开 `%VAR%`（手写实现，未知变量原样保留，不猜） |
-| 只清理**当前进程**的用户目录，而卸载器通常以管理员身份运行 | 当初装软件的普通用户那份数据、以及该用户桌面 / 开始菜单里的快捷方式全部残留 | 把路径剥成「相对用户目录的尾巴」，重放到 `ProfileList` 里所有已加载的用户目录上 |
-
-**没勾选就一个数据目录都不会碰**：前端未勾选时 `user_data_path` 传的是空数组，
-而跨用户清理吃的正是同一份 `to_be_delete`，所以「勾选才删数据」不需要第二套开关。
-此时仍会删的只有快捷方式与开始菜单里的产品文件夹（含其它用户桌面上指向已删除 exe
-的死图标）—— 那不属于用户数据。`%TEMP%` 里清的是 Kachina 自己的安装期文件
-（日志、运行时安装包、引导器、卸载器临时副本），同样不是用户数据。
-
-跨用户重放对「数据目录」和「快捷方式 / 开始菜单文件夹」分别跟随各自的语义：
-数据目录只在勾选后才会跨用户删（前端没勾就传空数组），而快捷方式与开始菜单文件夹
-不受勾选影响 —— 其它用户桌面上指向已删除 exe 的死图标总归要清掉。
-
-另外两类残留也一并处理：
-
-- `%TEMP%` 里 Kachina 自己留下的文件（`KachinaInstaller.log` 日志、
-  `Kachina.RuntimePackage.*.exe` 运行时安装包、`kachina.MicrosoftEdgeWebview2Setup.exe`
-  引导器、`kachina.uninst.*.exe` 卸载器临时副本）按**固定文件名白名单**删，
-  只删文件、不递归、跳过正在运行的卸载器自身；
-- 卸载开始前会检测主程序是否在运行（常驻托盘时很常见），询问后结束进程再删 ——
-  否则它自己的 exe、`logs\` 与 WebView2 的 `EBWebView` 缓存都被占用，删不掉就是残留。
-  拒绝结束进程则整个卸载不执行，回到卸载界面。`silent` / `non_interactive` 直接结束。
-
-**已知不覆盖**：被 OneDrive 重定向过的 `Documents` / `AppData`
-（重定向后的真实位置不在 `ProfileList` 的 `ProfileImagePath` 里）只能命中当前进程
-用户那一份；WebView2 的 `EBWebView` 目录与凭据管理器条目本项目不产生，未处理。
+没勾选「同时删除用户数据」时一个数据目录都不会碰（安装器收到的是空数组）；此时仍会
+删掉快捷方式与开始菜单里的产品文件夹。
 
 ### `agreementFile` / `agreementFormat` / `agreementTitle` — 可配置的用户协议
 
@@ -231,23 +151,12 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 
 - `agreementFile` 相对**配置文件所在目录**解析，这里指向仓库根的 `USER_AGREEMENT.txt`；
   与 `pack.ps1` 的工作目录无关。
-- `agreementFormat` 支持 `text`（原样保留换行缩进）/ `markdown` / `html`，
-  三者渲染结果统一过 DOMPurify 再 `v-html`。
-- 打包（`pack`）时正文被**内联进 exe**（`agreement: { title, format, content }`），
-  所以离线安装器、`update.exe`、`uninst.exe` 共用同一份协议，运行期不读文件、不联网。
-- 安装界面的「我已阅读并同意 **用户协议**」里，链接可点击，弹窗显示全文；
-  弹窗底部「我已阅读并同意」会顺手勾上同意框（「关闭」只关弹窗，不改勾选状态）。
-  正文可滚动、按钮固定在下方不遮正文 —— 安装窗口只有 520×250，弹窗骨架因此改成
-  纵向 flex，细节见 Kirara 的 `LOCAL_PATCHES.md` 第 5 节。
-- **内联了协议正文就必须主动勾选**才能点「安装」（`acceptEula` 初始为 `false`）。
-  没有协议内容时保持上游默认（视为已同意）；`silent` / `non_interactive` 安装、
-  更新、卸载都不受影响。
-- 正文统一过 DOMPurify，且策略比上游更严：禁 `style/form/input/iframe/object/embed/
-  link/meta/base/svg/math` 等标签与 `style/srcdoc/formaction/data/background` 等属性，
-  URI 只放行 `http(s)` / `mailto` / 页内锚点。正文里的链接点击一律被拦截
-  （安装器窗口不能被导航走），`http(s)` 外链交给系统浏览器打开。
-- 读文件失败只打印 warning 并继续打包，此时链接退化为不可点击的纯文字
-  （与上游行为一致）。
+- `agreementFormat` 支持 `text` / `markdown` / `html`。
+- 打包时正文被**内联进 exe**，所以离线安装器、`update.exe`、`uninst.exe` 共用同一份
+  协议，运行期不读文件、不联网。
+- 内联了正文就必须主动勾选同意才能点「安装」；`silent` / `non_interactive` 安装、更新、
+  卸载不受影响。
+- 读文件失败只打印 warning 并继续打包，此时界面上的协议入口退化为不可点击的文字。
 
 ### `imageFile` / `iconFile` — 安装界面左栏图与安装器图标
 
@@ -259,78 +168,41 @@ Kachina 是本项目唯一的安装、卸载和在线更新实现。宿主程序
 | 字段 | 说明 |
 | --- | --- |
 | `imageFile` | 安装界面左栏的图片；内容按 `RIFF/WEBP` 魔数识别为图片，其它内容按 CSS 主题注入 |
-| `iconFile` | 安装器与更新器 exe 的图标（`.ico`）；卸载器不单独打包，安装期从安装器（更新时从更新器）的映像复制，所以三个 exe 的图标来自同一份配置 |
+| `iconFile` | 安装器与更新器 exe 的图标（`.ico`），三个 exe 的图标因此一致 |
 
 - 两个字段都相对**配置文件所在目录**解析（左栏图就放在本目录），只在打包期消费，
   不会写进包内配置；点名了文件却读不到时**打包直接失败**，不静默回退。
-- 两项都不写时，左栏用 Kirara 内置的左栏图、exe 用 Kirara 内置图标。
+- 两项都不写时用工具链内置的左栏图与图标。
 - 这两个键由 Kirara 的 `pack` 读取。CI 用的是 Kirara **最新 Release** 的 builder：
   该 Release 若早于这两项支持，builder 只会把它们当未识别键打一行 warning 后忽略
   （安装器退回内置资源），不会让打包失败 —— 那时配置看起来生效了，实际没有。
-- `pack.ps1` 不逐条传 `--image` / `--icon`：三步 `pack` 共用同一份配置，安装器、
-  更新器、卸载器不会各带一套资源。命令行参数仍优先于配置，改用命令行时三步必须
-  传同一份，否则安装器自更新会把界面或图标换回不带自定义资源的那份。
+- `pack.ps1` 不逐条传 `--image` / `--icon`：三步 `pack` 共用同一份配置，不会各带一套
+  资源。命令行参数仍优先于配置，改用命令行时三步必须传同一份。
 - 左栏图是 399×454 的竖图：安装界面左栏是 180px 宽的竖条，方形图（如应用图标位图
   `src/Host/Assets/app.webp`）会被 `object-fit: contain` 留出大片空白。当前这张与
   Kirara 内置的左栏图同源，写在配置里是为了不受工具链内置资源变化的影响。
 
-## 卸载器的删除安全阀（防误删 / 防被利用提权）
-
-卸载器通常以管理员身份运行（`uacStrategy: "prefer-admin"`），而「删什么」来自
-打包配置。为了不让配置笔误或被篡改的安装目录被管理员权限放大，Kirara 的本地补丁
-加了几道安全阀（详见其 `LOCAL_PATCHES.md` 第 3 节）：
-
-| 通道 | 规则 |
-| --- | --- |
-| `extraUninstallRegistry` 删值 | 子键至少两级，不碰任何根键的直属项 |
-| `extraUninstallRegistry` 删整棵子键 | 至少三级，且末级不能是共享容器（`Run`/`RunOnce`/`Uninstall`/`Policies`/`Explorer`/`Classes`/`Windows`/`Services`…）；`value` 写成空字符串视为配置错误，整条跳过 |
-| `extraUninstallLnkNames` 快捷方式 | 绝对路径、无 `..`、自身与所有父级都不是符号链接 / junction、不在 `%SystemRoot%` 内；目录只放行 `Programs\<产品名>`，文件只放行 `Desktop\*.lnk` 或 `Programs\<产品名>\*.lnk` |
-| `userDataPath` / `extraUninstallPath` | 同样的形状校验 + 至少两级 + 不能是受保护根目录本身（盘符根、`%SystemRoot%`、`%ProgramFiles%`、`%ProgramData%`、`%USERPROFILE%`、`%APPDATA%`、`%LOCALAPPDATA%`、`%PUBLIC%`、`%TEMP%`），也不能是配置目录下面一层的 **Shell 容器**（`Desktop`、`Documents`、`Downloads`、`AppData[\Local\|\Roaming]`、`…\Start Menu\Programs[\Startup]`、`%PUBLIC%\Desktop` 等）——产品目录一定在容器下面至少一层，所以正常清理不受影响 |
-| 同上路径重放到**其他用户**目录 | 尾巴第一段必须是 `AppData` / `Documents` / `Desktop`、至少两级（`AppData` 下至少三级）、无 `..`；`Desktop` 下只放行 `.lnk`；尾巴的**叶子名不能是 Shell 容器**（`PER_USER_DENY_LEAVES`：`Programs`、`Start Menu`、`Microsoft`、`Local`、`Documents`、`Desktop`、`Cache`、`OneDrive` 等 30 余个）；重放结果再过一遍上面的 `is_safe_delete_target`，且必须是真实存在的目录或 `.lnk` |
-| `%TEMP%` 下的安装期临时文件 | 只认四个固定文件名形状（`KachinaInstaller.log`、`Kachina.RuntimePackage.*.exe`、`kachina.MicrosoftEdgeWebview2Setup.exe`、`kachina.uninst.*.exe`）；只删文件不删目录、不递归、跳过正在运行的卸载器自身 |
-
-被拒绝的路径只记 `warn` 日志，卸载继续。本项目现有配置全部落在放行范围内。
-
-宿主侧（`src/Core/`）另有一道：程序内「卸载本软件」启动 `uninst.exe` 前会校验
-路径在自身目录内、文件名符合约定、不是符号链接、目录不是系统/配置根目录；
-**宿主已提权时还要求安装目录位于 `Program Files` 下**，否则拒绝启动
-（避免普通用户在可写目录放同名 exe 借管理员令牌执行）。
-
 ## CI
 
-两个工作流：**Devcheck**（`devcheck.yml`，push/PR 自动执行，跑 `tools/devcheck` 的
-全部检查层 + 自检 + Web UI 构建，几分钟）与 **Build**（`build.yml`，仅手动触发，出安装包）。
+两个工作流：**Devcheck**（`devcheck.yml`，push/PR 自动）与 **Build**（`build.yml`，
+仅手动，出安装包）。
 
-`build.yml` 四个 job：
+- **Devcheck** 跑 `tools/devcheck` 的全部检查层 + 自检 + Web UI 构建。其中 `vendor` 层
+  断言「安装器工具链只来自 Kirara 的最新 Release」，`packaging` 层断言配置与宿主常量
+  一致。
+- **Build** 依次跑 `build-builder`（下载 Kirara 最新 Release 的 `kirara-builder.exe`）→
+  `build-app` → `pack`（`packaging\pack.ps1 -BuilderPath packaging\tools\kirara-builder.exe`，
+  给了 `-BuilderPath` 就不再查找 Kirara 目录）→ `package-e2e`（真装、真升、真卸，
+  并解压便携包跑一次诊断启动）。
 
-1. `build-builder` —— 用 `gh release download` 下载独立项目 Kirara 最新 Release 的
-   `kirara-builder.exe`（Kirara 自己的发布流程负责从源码构建），本仓库 CI 不再检出
-   Kirara 源码、也不再现场编译 Rust。
-2. `build-app` —— `build.ps1 -SkipSetup` 产出 `dist\`；随后让刚构建出的宿主导出
-   登录计划任务 XML，交给 runner 上的 `schtasks` 真建一次、真删一次。
-3. `pack` —— 下载前两者的产物，执行
-   `packaging\pack.ps1 -BuilderPath packaging\tools\kirara-builder.exe`；给了
-   `-BuilderPath` 就不再查找 Kirara 目录（CI 里没有 Kirara 检出）。
-4. `package-e2e` —— 拿 `pack` 产物在 Windows runner 上真装、真升、真卸，并解压便携包
-   跑一次诊断启动；矩阵为 `offline-install`、`already-latest`、`offline-update`、
-   `uninstall`、`portable-smoke`。
-
-**安装器工具链只来自 Kirara 官方发布的最新 Release 产物**：本仓库不内嵌 kachina 源码、
-不是 submodule；工作流与打包脚本除 `gh release download --repo bainian-gudu/Kirara`
-外，没有任何其它 `git clone` / `releases/download` / `Invoke-WebRequest` 之类的外部
-拉取动作。这条约束由 devcheck 的 `vendor` 层自动断言，每次 push 都会在 Devcheck
-工作流里跑一遍。遥测（Sentry / cocogoat 统计）不许回归的断言在 Kirara 的
-`tools/devcheck` 里。
-
-CI 仍会联网获取 NuGet / npm registry / marketplace action —— 这是任何构建都免不了的；
-被禁止的是「安装器本体来自 Kirara 之外的来源」。
+本仓库不内嵌 kachina 源码、不是 submodule；工作流与打包脚本除
+`gh release download --repo bainian-gudu/Kirara` 外，没有任何其它 `git clone` /
+`releases/download` / `Invoke-WebRequest` 之类的外部拉取动作。
 
 ### workflow 里那些看着多余的设置
 
-工作流与脚本的注释只留一句指针，完整理由记在这里（约定：**思路、踩坑过程、
-参考的项目/issue 一律写文档，不写进代码注释**）。安装器侧（Rust nightly、Ninja、
-MSVC 环境注入、vendored `rcedit-rs`）的设置随工具链搬到了 Kirara，理由记在该仓库的
-`README.md` 里。
+工作流与脚本的注释只留一句指针，完整理由记在这里（约定：**思路、踩坑过程、参考的
+项目 / issue 一律写文档，不写进代码注释**）。
 
 | 设置 | 为什么 |
 | --- | --- |
@@ -340,15 +212,8 @@ MSVC 环境注入、vendored `rcedit-rs`）的设置随工具链搬到了 Kirara
 | 仓库根的 `.gitattributes`（`* text=auto eol=lf`） | windows-latest 的 git 默认 `core.autocrlf=true`，检出成 CRLF 后 `prettier --check` 在 Windows 上必挂。详见 [`../tools/devcheck/README.md`](../tools/devcheck/README.md)「跨平台的坑」 |
 | `git config --global init.defaultBranch main`（放在 checkout 之前） | `actions/checkout` 会先 `git init`，ubuntu 镜像上默认分支名还是 `master`，每次打 8 行 hint |
 
-### Build 日志里这些告警是正常的（都不是本项目的代码）
+## 宿主侧的卸载前校验
 
-| 字样 | 来源 |
-| --- | --- |
-| `warning: the following packages contain code that will be rejected by a future version of Rust: russh v0.54.5` | 上游依赖 `russh` 的 future-incompat 提示，只在升级 `russh` 时消失，不影响产物 |
-| `Could Not Find ...\target\x86_64-win7-windows-msvc\release\kachina-builder...` | tauri CLI 自己探测产物路径的输出；实际产物落在不带三元组的 `target\release\`，Kirara 的 `build.ps1` 有兜底分支会接住它 |
-
-## 升级上游 Kachina
-
-源码快照、本地补丁与「升级上游时的套用顺序」都在 Kirara：见它的 `UPSTREAM.md` 与
-`LOCAL_PATCHES.md`。升级后还要回来核对 `packaging.config.json`（若上游新增了配置项）
-与本文件的说明。
+程序内「卸载本软件」启动 `uninst.exe` 前会校验路径在自身目录内、文件名符合约定、不是
+符号链接、目录不是系统 / 配置根目录；**宿主已提权时还要求安装目录位于 `Program Files`
+下**，否则拒绝启动（避免普通用户在可写目录放同名 exe 借管理员令牌执行）。
