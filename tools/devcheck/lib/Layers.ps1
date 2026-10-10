@@ -194,10 +194,13 @@ function Test-PackagingProfile {
     Want 'agreementFile 指向的协议正文存在且非空' $agreementOk "$agreement"
     Want 'agreementFormat 为 text' ($cfg.agreementFormat -eq 'text') "$($cfg.agreementFormat)"
     Want 'agreementTitle 非空' (-not [string]::IsNullOrWhiteSpace($cfg.agreementTitle)) "$($cfg.agreementTitle)"
-    # GitHub Latest 返回的 tag 已带 v 前缀；再手写一个 v 会拼成 vv1.2.3。
+    # GitHub Latest 返回的 tag 带 v 前缀，Release 文件名不带；用 versionRegex
+    # 只提取数字版本号，路径与文件名才能同时命中。
     $expectedUri = "bainian-gudu/HoYoEnhance/releases/download/`${version}/$($cfg.appName).Install.`${version}.exe"
-    $uri = @($cfg.source)[0].uri
-    Want 'source 指向本仓库的 Release 安装包' ("$uri" -like "*$expectedUri") "$uri"
+    $uri = "$(@($cfg.source)[0].uri)"
+    $uriParts = $uri -split '#', 2
+    Want 'source 指向本仓库的 Release 安装包' ($uriParts[0] -like "*$expectedUri") "$uri"
+    Want 'source 用 versionRegex 去掉 tag 的 v 前缀' ($uriParts.Count -eq 2 -and $uriParts[1] -eq 'versionRegex=/tag/v?([0-9.]%2B)') "$uri"
 
     # 6) 安装界面左栏图与安装器图标：两个路径都由配置点名，相对配置文件所在目录解析。
     #    打包期读不到只会退回 Kirara 的内置资源，安装器里看不出区别，所以先在这里拦住。

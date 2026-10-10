@@ -109,7 +109,7 @@ if (-not (Test-Path (Join-Path $DistDir "ui\index.html"))) {
 if (-not $Version) {
     $csproj = Join-Path $RepoRoot "src\Host\GenshinFpsUnlocker.Host.csproj"
     $raw = Get-Content $csproj -Raw
-    $Version = if ($raw -match "<Version>([^<]+)</Version>") { $Matches[1].Trim() } else { "1.1.1" }
+    $Version = if ($raw -match "<Version>([^<]+)</Version>") { $Matches[1].Trim() } else { "1.1.3" }
 }
 Write-Host "==> 版本 $Version / 仓库 $RepoId" -ForegroundColor Cyan
 
