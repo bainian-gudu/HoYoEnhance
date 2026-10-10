@@ -333,7 +333,7 @@ CI 的安装器工具链**只从独立项目 Kirara 的最新 Release 下载** `
 | `src/Host/Assets/app.webp`、`src/Ui/public/favicon.webp` | 应用图标（绮良良抱纸箱）的位图版本，源图同上 | [babalae/better-genshin-impact](https://github.com/babalae/better-genshin-impact) 的 `BetterGenshinImpact/Resources/Images/logo.png` / `Build/micasetup/Favicon.png`，由 `tools/to-webp.mjs` 转成 WebP | 素材随 BetterGI（**GPL-3.0**）；角色形象 © 米哈游 |
 | `src/Host/Assets/app.ico` | 应用图标（多尺寸 ICO）：窗体 / 托盘 / 快捷方式 / exe 资源；安装器与更新器 exe 图标（`packaging.config.json` 的 `iconFile`） | BetterGI 的 `logo.ico`；**Windows 图标 API 只认 ICO，不能换成 WebP** | 同上 |
 | `src/Host/Assets/favicon.webp` | 同一形象的安装包图标位图变体 | BetterGI 的 `Build/micasetup/Favicon.ico` 转 WebP | 同上 |
-| `packaging/left.webp` | 安装器左栏图（420×700 竖图，`packaging.config.json` 的 `imageFile`） | **gpt-6-astra-max 生成的原神风格插画**（个人自用前提下生成，非官方素材），与 `teyvat-landscape.webp` 同一场景；2026-09-11 曾从安装界面撤下，本次按配置恢复 | 风格致敬《原神》；场景本身非米哈游素材 |
+| `packaging/left.webp` | 安装器左栏图（399×454 竖图，`packaging.config.json` 的 `imageFile`） | 上游 kachina-installer 自带的左栏立绘（绮良良），与 Kirara 的 `web/left.webp` 逐字节相同（SHA256 `c4da8566…`）；写进配置是为了不随工具链内置资源变化 | 上游仓库素材（上游未提供 LICENSE）；角色形象 © 米哈游 |
 | `src/Ui/public/images/teyvat-landscape.webp` | 概览页 / 指南页的璃月风格山水横幅 | **gpt-6-astra-max 生成的原神风格插画**（个人自用前提下生成，非官方素材），转 WebP | 风格致敬《原神》；场景本身非米哈游素材 |
 | `src/Ui/public/images/starrail-icon.webp` | 《崩坏：星穹铁道》游戏图标（游戏库与顶栏切换器用） | 米哈游官方素材，转 WebP | © 米哈游 / HoYoverse |
 | `src/Ui/public/favicon.svg` | 星芒形单色 logo（纯几何路径，304 字节） | 本项目手写 SVG（矢量，不转位图） | 本项目（MIT） |
