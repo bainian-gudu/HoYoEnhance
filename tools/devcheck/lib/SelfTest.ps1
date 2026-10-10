@@ -154,6 +154,17 @@ jobs:
         -Run { Test-PackagingProfile } `
         -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $program) -Path $program }
 
+    # --- 5e) packaging：界面资源点名了却读不到就必须报错 ---
+    Add-Case 'packaging 层能抓到安装界面资源文件缺失' `
+        -Mutate {
+            $text = [System.IO.File]::ReadAllText($profile)
+            $broken = $text.Replace('"imageFile": "left.webp"', '"imageFile": "left-missing.webp"')
+            if ($broken -eq $text) { throw '注入失败：packaging.config.json 里没有 imageFile 的当前取值' }
+            [System.IO.File]::WriteAllText($profile, $broken)
+        } `
+        -Run { Test-PackagingProfile } `
+        -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $profile) -Path $profile }
+
     # --- 6) hosttest：把 ProcessRunner 超时路径上的 KillTree 拿掉 ---
     #      只注入一个能编过的行为错误（少杀进程树，而不是改标记或提前 return，
     #      后两者会带 CS0162 噪音或者只在特定断言上暴露）。

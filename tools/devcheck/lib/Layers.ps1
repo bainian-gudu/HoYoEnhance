@@ -196,12 +196,45 @@ function Test-PackagingProfile {
     $uri = @($cfg.source)[0].uri
     Want 'source 指向本仓库的 Release 安装包' ("$uri" -like "*$expectedUri") "$uri"
 
-    # 6) 运行库与提权策略
+    # 6) 安装界面左栏图与安装器图标：两个路径都由配置点名，相对配置文件所在目录解析。
+    #    打包期读不到只会退回 Kirara 的内置资源，安装器里看不出区别，所以先在这里拦住。
+    $cfgDir = Split-Path -Parent $cfgPath
+    foreach ($spec in @(
+            @{ Key = 'imageFile'; What = '左栏图'; Ext = '.webp' }
+            @{ Key = 'iconFile'; What = '安装器图标'; Ext = '.ico' })) {
+        $rel = "$($cfg.($spec.Key))"
+        if ([string]::IsNullOrWhiteSpace($rel)) {
+            Want "$($spec.Key) 已配置（$($spec.What)）" $false '未配置会退回 Kirara 内置资源'
+            continue
+        }
+        Want "$($spec.Key) 扩展名为 $($spec.Ext)" ($rel.EndsWith($spec.Ext)) "$rel"
+        $full = Join-Path $cfgDir $rel
+        $exists = Test-Path -LiteralPath $full -PathType Leaf
+        Want "$($spec.Key) 指向的文件存在：$rel" $exists "$full"
+        if (-not $exists) { continue }
+        $bytes = [System.IO.File]::ReadAllBytes($full)
+        # Kirara 按内容而不是扩展名认图片：只有 RIFF....WEBP 当图片，其它内容按 CSS 主题注入。
+        $isWebp = ($bytes.Length -ge 12) -and ([System.Text.Encoding]::ASCII.GetString($bytes, 0, 4) -eq 'RIFF') -and ([System.Text.Encoding]::ASCII.GetString($bytes, 8, 4) -eq 'WEBP')
+        $isIco = ($bytes.Length -ge 6) -and ($bytes[0] -eq 0) -and ($bytes[1] -eq 0) -and ($bytes[2] -eq 1) -and ($bytes[3] -eq 0)
+        if ($spec.Key -eq 'imageFile') {
+            Want 'imageFile 是 WebP（否则会被当成 CSS 主题注入）' $isWebp "$rel"
+        }
+        else {
+            Want 'iconFile 是 ICO（rcedit 只认 ICO）' $isIco "$rel"
+        }
+    }
+    # 三步 pack 共用同一份配置；改用命令行参数会覆盖配置，漏传一步就得到资源不一致的 exe。
+    $packScriptText = [System.IO.File]::ReadAllText((Join-Path $RepoRoot 'packaging/pack.ps1'))
+    Want 'pack.ps1 不传 --image / --icon（界面资源随配置走）' `
+        (-not ($packScriptText.Contains('--image') -or $packScriptText.Contains('--icon'))) `
+        '命令行参数会覆盖配置'
+
+    # 7) 运行库与提权策略
     Want 'runtimes 含 .NET Desktop Runtime 9' (@($cfg.runtimes) -contains 'Microsoft.DotNet.DesktopRuntime.9') "$($cfg.runtimes -join ',')"
     Want 'runtimes 含 VCRedist' (@($cfg.runtimes) -contains 'Microsoft.VCRedist.2015+.x64') "$($cfg.runtimes -join ',')"
     Want 'uacStrategy 为 prefer-admin' ($cfg.uacStrategy -eq 'prefer-admin') "$($cfg.uacStrategy)"
 
-    # 7) 兼容表面：运行库前置、便携包、数据目录回退都必须仍在接线中
+    # 8) 兼容表面：运行库前置、便携包、数据目录回退都必须仍在接线中
     $programPath = Join-Path $RepoRoot 'src/Host/Program.cs'
     $programText = [System.IO.File]::ReadAllText($programPath)
     Want 'Program 调用 RuntimePrerequisite.EnsureOrPrompt' `

@@ -58,18 +58,23 @@ pwsh tools/devcheck/devcheck.ps1 -Layer ui          # 不在 all 里：要先 cd
 
 `packaging/packaging.config.json` 是「应用侧」的唯一事实来源：安装目录、ARP 名称、
 旧品牌兼容名、卸载时要清理的注册表 / 计划任务 / 快捷方式 / 用户数据目录、UAC 策略、
-协议文件、运行库。安装器只读它，所以「改了宿主却忘了改配置」只能在这里发现 ——
+协议文件、安装界面左栏图与安装器图标、运行库。安装器只读它，所以「改了宿主却忘了改
+配置」只能在这里发现 ——
 每一项都拿 `src/Core/AppPaths.cs` / `Autostart.cs` 里的常量交叉断言，而不是在检查里
 再抄一遍字面量（`AppPaths.cs` 里 `ProductName + ".exe"` 这类表达式会被解析后求值）。
+左栏图与图标是安装器唯一从本仓库读的文件：这里校验路径能按配置文件所在目录解析、
+文件存在，且内容真的是 WebP / ICO —— Kirara 按内容而不是扩展名识别图片，写错只会
+在安装界面里悄悄退回内置资源。
 
 ## `-SelfTest`：证明这套检查不是空壳
 
-检查工具最大的风险是「跑通了但其实什么都没查」。`-SelfTest` 会注入 16 个错误，逐个确认
+检查工具最大的风险是「跑通了但其实什么都没查」。`-SelfTest` 会注入 17 个错误，逐个确认
 对应层会失败：把 kachina 源码搬回仓库、工作流里加一条 `Invoke-WebRequest`、把打包脚本
 的 `$KiraraRepo` 改名、把 `build.yml` 里的 Kirara Release 仓库改成别家、让 `-BuilderPath`
 不再跳过 Kirara 查找、让 builder 路径不再固化绝对路径、放一个语法错误的 `.ps1`、改坏
 `packaging.config.json` 的 `exeName`、删掉数据目录回退、拿掉便携 zip 分支、断开运行库
-前置检查、删掉便携包上传路径、拿掉 `ProcessRunner` 超时路径的 `KillTree`、删掉
+前置检查、让配置里的左栏图指向不存在的文件、删掉便携包上传路径、拿掉 `ProcessRunner`
+超时路径的 `KillTree`、删掉
 `GameLocator` 剪枝表里的系统目录行、改了 C# DTO 但不重新生成 TypeScript 契约。
 
 自检会临时改写**仓库里的真实文件**，因此有两个保护：

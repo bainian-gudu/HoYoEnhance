@@ -45,6 +45,8 @@
     "Uninstall HoYoEnhance.lnk"
   ],
   "uacStrategy": "prefer-admin",
+  "imageFile": "left.webp",
+  "iconFile": "../src/Host/Assets/app.ico",
   "agreementFile": "../USER_AGREEMENT.txt",
   "agreementFormat": "text",
   "agreementTitle": "用户协议",
