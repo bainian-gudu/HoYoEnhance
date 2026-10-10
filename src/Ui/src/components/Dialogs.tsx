@@ -1,6 +1,7 @@
 /** 应用对话框：游戏路径设置、用户协议与安全声明、启动确认与通用危险操作确认。 */
-import { ArrowUpRight, Check, CircleHelp, Download, FileCode2, FolderOpen, Globe, Info, Monitor, Play, ScanLine, ShieldCheck, TriangleAlert } from 'lucide-react';
+import { ArrowUpRight, Check, CheckCircle2, CircleHelp, Download, FileCode2, FolderOpen, Globe, Info, LoaderCircle, Monitor, Package, Play, ScanLine, ShieldCheck, TriangleAlert } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { GithubIcon as Github } from './Brand';
 import { GAME_META, THIRD_PARTY_DISCLAIMER, cleanPath, gamePathHint, isValidGamePath, PROJECT_URL } from '../lib/config';
 import type { GameId, UnlockerConfig } from '../lib/config';
 import type { UpdateCheckResult } from '../lib/native';
@@ -141,7 +142,14 @@ export function ConfirmDialog({ title, description, action, onConfirm, onClose }
     footer={<><button className="button button-quiet" onClick={onClose} disabled={busy}>取消</button><button className="button button-danger" disabled={busy} onClick={() => { void (async () => { setBusy(true); try { await onConfirm(); } finally { setBusy(false); } })(); }}>{action}</button></>}><p className="confirmation-description">{description}</p></Modal>;
 }
 
-/** 新版本提示：展示版本号与发行说明，并交棒给安装目录里的更新程序。 */
+function formatUpdateDate(value: string | null): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' }).format(date);
+}
+
+/** 新版本提示：以发行页的信息层级展示版本、来源与更新说明，再交棒给安装目录里的更新程序。 */
 export function UpdateDialog({ update, onUpdate, onSkip, onClose }: {
   update: UpdateCheckResult;
   onUpdate: () => void | Promise<void>;
@@ -150,28 +158,48 @@ export function UpdateDialog({ update, onUpdate, onSkip, onClose }: {
 }) {
   const [busy, setBusy] = useState(false);
   const latest = update.latestVersion ?? '未知版本';
+  const releaseTitle = update.title?.trim() || `HoYoEnhance v${latest}`;
+  const publishedAt = formatUpdateDate(update.publishedAt);
+  const close = () => { if (!busy) onClose(); };
   return (
-    <Modal title={`发现新版本 v${latest}`} description="更新程序会从项目官方 GitHub Releases 下载并替换当前安装。" icon={Download} onClose={onClose} wide className="update-dialog"
+    <Modal title={`发现新版本 v${latest}`} description="官方 GitHub Releases 已就绪，确认后由安装器完成下载与替换。" icon={Download} onClose={close} wide className="update-dialog"
       footer={<>
         {update.releaseUrl && <a className="text-button muted" href={update.releaseUrl} target="_blank" rel="noreferrer"><Globe size={14} />手动下载<ArrowUpRight size={13} /></a>}
-        <button className="button button-quiet" onClick={onClose} disabled={busy}>稍后</button>
+        <button className="button button-quiet" onClick={close} disabled={busy}>稍后</button>
         <button className="button button-secondary" disabled={busy} onClick={() => { void (async () => { setBusy(true); try { await onSkip(); } finally { setBusy(false); } })(); }}>跳过此版本</button>
-        <button className="button button-primary" disabled={busy} onClick={() => { void (async () => { setBusy(true); try { await onUpdate(); } finally { setBusy(false); } })(); }}><Download size={15} />{busy ? '正在启动…' : '立即更新'}</button>
+        <button className="button button-primary update-primary" disabled={busy} onClick={() => { void (async () => { setBusy(true); try { await onUpdate(); } finally { setBusy(false); } })(); }}>{busy ? <LoaderCircle size={15} className="spin" /> : <Download size={15} />}{busy ? '正在启动…' : '立即更新'}</button>
       </>}>
-      <div className="update-status">
-        <span className="update-status-icon"><Download size={18} /></span>
-        <span><strong>发现可用更新</strong><small>已连接 GitHub Releases，可以立即下载并安装。</small></span>
+      <div className="update-page">
+        <section className="update-hero">
+          <div className="update-hero-icon"><Download size={24} strokeWidth={1.6} /></div>
+          <div className="update-hero-copy">
+            <div className="update-hero-label"><span className="update-live-dot" />可用更新</div>
+            <h3>{releaseTitle}</h3>
+            <p>从官方 GitHub Releases 获取最新安装包，下载与替换由安装器完成。</p>
+          </div>
+          <div className="update-hero-version"><span>最新版本</span><strong>v{latest}</strong></div>
+        </section>
+
+        <section className="update-version-track" aria-label="版本对比">
+          <div className="update-version-node"><span>当前版本</span><strong>v{update.currentVersion}</strong></div>
+          <div className="update-version-arrow"><ArrowUpRight size={18} /></div>
+          <div className="update-version-node is-target"><span>目标版本</span><strong>v{latest}</strong>{publishedAt && <small>{publishedAt}</small>}</div>
+        </section>
+
+        <section className="update-release">
+          <div className="update-release-heading"><div><Package size={16} /><h3>更新说明</h3></div><span>{releaseTitle}</span></div>
+          <div className="update-release-body"><pre>{update.notes?.trim() || '本次发行没有填写更新说明。'}</pre></div>
+        </section>
+
+        <section className="update-source">
+          <div className="update-source-icon"><Github size={18} /></div>
+          <div className="update-source-copy"><strong>GitHub Releases</strong><span>官方更新源 · 安装包由项目仓库发布</span></div>
+          <div className="update-source-status"><CheckCircle2 size={14} />已连接</div>
+          {update.releaseUrl && <a className="update-source-link" href={update.releaseUrl} target="_blank" rel="noreferrer">发行页<ArrowUpRight size={13} /></a>}
+        </section>
+
+        <div className="update-footnote"><Info size={15} /><p>更新会关闭当前窗口；下载、校验与文件替换由安装器完成。</p></div>
       </div>
-      <div className="update-summary">
-        <div><span>当前版本</span><strong>v{update.currentVersion}</strong></div>
-        <ArrowUpRight size={17} />
-        <div><span>最新版本</span><strong>v{latest}</strong></div>
-      </div>
-      <section className="update-notes">
-        <div className="update-notes-heading"><h3>更新说明</h3><span>v{latest}</span></div>
-        <pre>{update.notes || '本次发行没有填写更新说明。'}</pre>
-      </section>
-      <div className="subtle-notice"><Info size={16} /><p>更新会关闭当前窗口；请先保存正在进行的工作。下载、校验与文件替换由安装器完成。</p></div>
     </Modal>
   );
 }
