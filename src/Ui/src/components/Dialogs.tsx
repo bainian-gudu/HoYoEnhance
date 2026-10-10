@@ -1,5 +1,5 @@
 /** 应用对话框：游戏路径设置、用户协议与安全声明、启动确认与通用危险操作确认。 */
-import { ArrowUpRight, Check, CircleHelp, Download, FileCode2, FolderOpen, Info, Monitor, Play, ScanLine, ShieldCheck, TriangleAlert } from 'lucide-react';
+import { ArrowUpRight, Check, CircleHelp, Download, FileCode2, FolderOpen, Globe, Info, Monitor, Play, ScanLine, ShieldCheck, TriangleAlert } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { GAME_META, THIRD_PARTY_DISCLAIMER, cleanPath, gamePathHint, isValidGamePath, PROJECT_URL } from '../lib/config';
 import type { GameId, UnlockerConfig } from '../lib/config';
@@ -151,22 +151,26 @@ export function UpdateDialog({ update, onUpdate, onSkip, onClose }: {
   const [busy, setBusy] = useState(false);
   const latest = update.latestVersion ?? '未知版本';
   return (
-    <Modal title={`发现新版本 v${latest}`} description="更新程序会从项目官方 GitHub Releases 下载并替换当前安装。" icon={Download} onClose={onClose} wide
+    <Modal title={`发现新版本 v${latest}`} description="更新程序会从项目官方 GitHub Releases 下载并替换当前安装。" icon={Download} onClose={onClose} wide className="update-dialog"
       footer={<>
-        {update.releaseUrl && <a className="text-button muted" href={update.releaseUrl} target="_blank" rel="noreferrer">查看发行页面<ArrowUpRight size={14} /></a>}
+        {update.releaseUrl && <a className="text-button muted" href={update.releaseUrl} target="_blank" rel="noreferrer"><Globe size={14} />手动下载<ArrowUpRight size={13} /></a>}
         <button className="button button-quiet" onClick={onClose} disabled={busy}>稍后</button>
         <button className="button button-secondary" disabled={busy} onClick={() => { void (async () => { setBusy(true); try { await onSkip(); } finally { setBusy(false); } })(); }}>跳过此版本</button>
         <button className="button button-primary" disabled={busy} onClick={() => { void (async () => { setBusy(true); try { await onUpdate(); } finally { setBusy(false); } })(); }}><Download size={15} />{busy ? '正在启动…' : '立即更新'}</button>
       </>}>
+      <div className="update-status">
+        <span className="update-status-icon"><Download size={18} /></span>
+        <span><strong>发现可用更新</strong><small>已连接 GitHub Releases，可以立即下载并安装。</small></span>
+      </div>
       <div className="update-summary">
         <div><span>当前版本</span><strong>v{update.currentVersion}</strong></div>
         <ArrowUpRight size={17} />
         <div><span>最新版本</span><strong>v{latest}</strong></div>
       </div>
-      <div className="update-notes">
-        <h3>更新说明</h3>
+      <section className="update-notes">
+        <div className="update-notes-heading"><h3>更新说明</h3><span>v{latest}</span></div>
         <pre>{update.notes || '本次发行没有填写更新说明。'}</pre>
-      </div>
+      </section>
       <div className="subtle-notice"><Info size={16} /><p>更新会关闭当前窗口；请先保存正在进行的工作。下载、校验与文件替换由安装器完成。</p></div>
     </Modal>
   );

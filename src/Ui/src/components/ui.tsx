@@ -63,7 +63,7 @@ export function PageHeading({ title, description, children }: { title: string; d
 }
 
 /** 模态框基底：打开时背景 inert 并锁定滚动、Esc 关闭、Tab 焦点圈定在框内、关闭后焦点回落。 */
-export function Modal({ title, description, children, footer, onClose, icon: Icon, wide = false }: {
+export function Modal({ title, description, children, footer, onClose, icon: Icon, wide = false, className = '' }: {
   title: string;
   description?: string;
   children: ReactNode;
@@ -71,6 +71,7 @@ export function Modal({ title, description, children, footer, onClose, icon: Ico
   onClose: () => void;
   icon?: LucideIcon;
   wide?: boolean;
+  className?: string;
 }) {
   const titleId = useId();
   const descriptionId = useId();
@@ -84,11 +85,13 @@ export function Modal({ title, description, children, footer, onClose, icon: Ico
   useEffect(() => {
     const previousFocus = document.activeElement as HTMLElement | null;
     const previousOverflow = document.body.style.overflow;
+    const previousRootOverflow = document.documentElement.style.overflow;
     const appRoot = document.getElementById('root');
     const wasInert = appRoot?.inert ?? false;
     // 打开时：应用根设为 inert（背景不可聚焦/不可交互）并锁定页面滚动
     if (appRoot) appRoot.inert = true;
     document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
     const frame = requestAnimationFrame(() => {
       const preferred = dialogRef.current?.querySelector<HTMLElement>('[data-autofocus]');
       (preferred ?? dialogRef.current)?.focus();
@@ -112,6 +115,7 @@ export function Modal({ title, description, children, footer, onClose, icon: Ico
     return () => {
       cancelAnimationFrame(frame);
       document.body.style.overflow = previousOverflow;
+      document.documentElement.style.overflow = previousRootOverflow;
       if (appRoot) appRoot.inert = wasInert;
       document.removeEventListener('keydown', handleKey);
       // 焦点回落：还给打开对话框前的元素；其已卸载则落到主内容区
@@ -125,7 +129,7 @@ export function Modal({ title, description, children, footer, onClose, icon: Ico
       onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <motion.div ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby={titleId}
         aria-describedby={description ? descriptionId : undefined}
-        className={`modal ${wide ? 'modal-wide' : ''}`}
+        className={`modal ${wide ? 'modal-wide' : ''} ${className}`.trim()}
         initial={{ opacity: 0, y: 16, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }}
         exit={{ opacity: 0, y: 8, scale: 0.99 }} transition={{ duration: 0.2 }}>
         <div className="modal-header">
