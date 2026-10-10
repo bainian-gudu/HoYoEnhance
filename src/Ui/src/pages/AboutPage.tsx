@@ -3,7 +3,7 @@ import { BrandMark, GithubIcon as Github } from '../components/Brand';
 import { PageHeading } from '../components/ui';
 import { BRAND_NAME, BRAND_SUB, PROJECT_URL, THIRD_PARTY_DISCLAIMER } from '../lib/config';
 
-export function AboutPage({ onSafety, version = '1.1.4', isNative, onUninstall, onCheckUpdate, checkingUpdate }: { onSafety: () => void; version?: string; isNative?: boolean; onUninstall?: () => void; onCheckUpdate?: () => void | Promise<void>; checkingUpdate?: boolean }) {
+export function AboutPage({ onSafety, version = '1.1.5', isNative, onUninstall, onCheckUpdate, checkingUpdate }: { onSafety: () => void; version?: string; isNative?: boolean; onUninstall?: () => void; onCheckUpdate?: () => void | Promise<void>; checkingUpdate?: boolean }) {
   return <>
     <PageHeading title="关于项目" description="源于热爱，保持开放。" />
     <section className="about-intro"><BrandMark className="about-brand-mark" /><div><span className="section-kicker">LESS LIMITS. MORE ADVENTURE.</span><h2>{BRAND_NAME}<br />{BRAND_SUB}<span className="about-version">v{version}</span></h2><p>一个轻量、开源的帧率解锁工具，支持原神与崩坏：星穹铁道。<br />自定义目标帧率，让你的硬件潜力与冒险一起释放。</p><div className="about-actions"><a className="button button-primary" href={PROJECT_URL} target="_blank" rel="noreferrer"><Github size={17} />访问 GitHub<ArrowUpRight size={15} /></a><a className="button button-secondary" href={`${PROJECT_URL}/releases`} target="_blank" rel="noreferrer">查看发行版本<ArrowUpRight size={15} /></a>{isNative && onCheckUpdate && <button className="button button-secondary" disabled={checkingUpdate} onClick={() => void onCheckUpdate()}><RefreshCw size={15} className={checkingUpdate ? 'spin' : ''} />{checkingUpdate ? '检查中…' : '检查更新'}</button>}</div></div></section>
