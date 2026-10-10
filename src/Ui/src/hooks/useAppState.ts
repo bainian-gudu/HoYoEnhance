@@ -70,7 +70,7 @@ export function useAppState() {
   const [needsAdmin, setNeedsAdmin] = useState(false);
   const [elevating, setElevating] = useState(false);
   const [autostart, setAutostart] = useState<AutostartState>({ mode: 'disabled', notice: null });
-  const [version, setVersion] = useState('1.1.3');
+  const [version, setVersion] = useState('1.1.4');
   const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const importRef = useRef<HTMLInputElement>(null);
@@ -148,7 +148,7 @@ export function useAppState() {
     setIsElevated(Boolean(state.isElevated));
     setNeedsAdmin(Boolean(state.needsAdminForUnlock));
     setAutostart(state.autostart);
-    setVersion(state.version || '1.1.3');
+    setVersion(state.version || '1.1.4');
     setLaunchState(state.attachedPid > 0 ? 'running' : 'idle');
   }, []);
 

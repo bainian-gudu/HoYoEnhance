@@ -196,7 +196,7 @@ function Test-PackagingProfile {
     Want 'agreementTitle 非空' (-not [string]::IsNullOrWhiteSpace($cfg.agreementTitle)) "$($cfg.agreementTitle)"
     # GitHub Latest 返回的 tag 带 v 前缀，Release 文件名不带；用 versionRegex
     # 只提取数字版本号，路径与文件名才能同时命中。
-    $expectedUri = "bainian-gudu/HoYoEnhance/releases/download/`${version}/$($cfg.appName).Install.`${version}.exe"
+    $expectedUri = "bainian-gudu/HoYoEnhance/releases/download/v`${version}/$($cfg.appName).Install.`${version}.exe"
     $uri = "$(@($cfg.source)[0].uri)"
     $uriParts = $uri -split '#', 2
     Want 'source 指向本仓库的 Release 安装包' ($uriParts[0] -like "*$expectedUri") "$uri"
