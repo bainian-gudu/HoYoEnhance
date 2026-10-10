@@ -194,7 +194,8 @@ function Test-PackagingProfile {
     Want 'agreementFile 指向的协议正文存在且非空' $agreementOk "$agreement"
     Want 'agreementFormat 为 text' ($cfg.agreementFormat -eq 'text') "$($cfg.agreementFormat)"
     Want 'agreementTitle 非空' (-not [string]::IsNullOrWhiteSpace($cfg.agreementTitle)) "$($cfg.agreementTitle)"
-    $expectedUri = "bainian-gudu/HoYoEnhance/releases/download/v`${version}/$($cfg.appName).Install.`${version}.exe"
+    # GitHub Latest 返回的 tag 已带 v 前缀；再手写一个 v 会拼成 vv1.2.3。
+    $expectedUri = "bainian-gudu/HoYoEnhance/releases/download/`${version}/$($cfg.appName).Install.`${version}.exe"
     $uri = @($cfg.source)[0].uri
     Want 'source 指向本仓库的 Release 安装包' ("$uri" -like "*$expectedUri") "$uri"
 

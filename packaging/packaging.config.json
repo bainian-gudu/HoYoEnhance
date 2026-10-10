@@ -3,7 +3,7 @@
     {
       "id": "github",
       "name": "GitHub",
-      "uri": "https://github.com/bainian-gudu/HoYoEnhance/releases/download/v${version}/HoYoEnhance.Install.${version}.exe"
+      "uri": "https://github.com/bainian-gudu/HoYoEnhance/releases/download/${version}/HoYoEnhance.Install.${version}.exe"
     }
   ],
   "appName": "HoYoEnhance",
