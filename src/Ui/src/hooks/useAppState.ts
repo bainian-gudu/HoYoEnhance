@@ -8,11 +8,11 @@ import {
 } from '../lib/config';
 import { mergePendingPatch, mergeQueuedPatch } from '../lib/configPatch';
 import { gameRuntimeState } from '../lib/gameRuntime';
-import type { AutostartState, NativeState } from '../lib/native';
-import { isNativeHost, nativeGetBootstrap, nativeInvoke, onNativeLog, onNativeState } from '../lib/native';
+import type { AutostartState, NativeState, NativeUpdateEvent, UpdateCheckResult } from '../lib/native';
+import { isNativeHost, nativeGetBootstrap, nativeInvoke, onNativeLog, onNativeState, onNativeUpdate } from '../lib/native';
 import { useAppChrome } from './useAppChrome';
 
-export type ModalType = 'path' | 'safety' | 'launch' | 'reset' | 'clearLogs' | 'uninstall' | null;
+export type ModalType = 'path' | 'safety' | 'launch' | 'reset' | 'clearLogs' | 'uninstall' | 'update' | null;
 export type LaunchState = 'idle' | 'launching' | 'running';
 
 /**
@@ -71,6 +71,8 @@ export function useAppState() {
   const [elevating, setElevating] = useState(false);
   const [autostart, setAutostart] = useState<AutostartState>({ mode: 'disabled', notice: null });
   const [version, setVersion] = useState('1.0.1');
+  const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
   const importRef = useRef<HTMLInputElement>(null);
   // 每个游戏各自记录上一次已播报的目标帧率，避免切换游戏时误报「帧率已调整」。
   const previousFps = useRef<Record<GameId, number>>({
@@ -91,6 +93,21 @@ export function useAppState() {
     setToasts((previous) => [...previous.slice(-2), { id: ++toastId.current, title, description, type }]);
   }, []);
   const dismissToast = useCallback((id: number) => setToasts((previous) => previous.filter((toast) => toast.id !== id)), []);
+  const handleUpdateEvent = useCallback((event: NativeUpdateEvent) => {
+    if (event.update.status === 'available') {
+      setUpdateInfo(event.update);
+      setModal((previous) => previous === 'safety' ? previous : 'update');
+      addLog('Info', `发现新版本 v${event.update.latestVersion ?? ''}。`);
+      return;
+    }
+    if (event.source === 'tray') {
+      if (event.update.status === 'error') {
+        notify('检查更新失败', event.update.error || '无法连接 GitHub Releases。', 'error');
+      } else {
+        notify('当前已是最新版本', `v${event.update.currentVersion}`);
+      }
+    }
+  }, [addLog, notify]);
 
   const applyNativeState = useCallback((state: NativeState) => {
     // 用户刚手动切过游戏时，宿主在收到 patch 之前推送的旧状态不能把选择覆盖回去。
@@ -152,6 +169,7 @@ export function useAppState() {
           });
         }
         else addLog('Info', '已连接桌面服务。');
+        if (boot.updateNotice) handleUpdateEvent(boot.updateNotice);
         if (!boot.state.config.safetyNoticeAcknowledged) setModal('safety');
       } catch (error) {
         notify('无法连接桌面服务', error instanceof Error ? error.message : '未知错误', 'error');
@@ -162,8 +180,9 @@ export function useAppState() {
     })();
     const offState = onNativeState((state) => applyNativeState(state));
     const offLog = onNativeLog((entry) => setLogs((prev) => [...prev, entry].slice(-200)));
-    return () => { cancelled = true; offState(); offLog(); };
-  }, [native, applyNativeState, addLog, notify]);
+    const offUpdate = onNativeUpdate(handleUpdateEvent);
+    return () => { cancelled = true; offState(); offLog(); offUpdate(); };
+  }, [native, applyNativeState, addLog, notify, handleUpdateEvent]);
 
   // 仅网页预览（非宿主）模式：将配置持久化到 localStorage
   useEffect(() => {
@@ -359,6 +378,54 @@ export function useAppState() {
     }
   }
 
+  async function checkForUpdates() {
+    if (!native) {
+      notify('仅桌面版支持在线更新', '请从 GitHub Releases 下载最新版本。', 'info');
+      return;
+    }
+    if (checkingUpdate) return;
+    setCheckingUpdate(true);
+    try {
+      const result = await nativeInvoke<UpdateCheckResult>('checkUpdate');
+      if (result.status === 'available') {
+        setUpdateInfo(result);
+        setModal('update');
+        addLog('Info', `发现新版本 v${result.latestVersion ?? ''}。`);
+      } else if (result.status === 'error') {
+        notify('检查更新失败', result.error || '无法连接 GitHub Releases。', 'error');
+        addLog('Warn', `检查更新失败：${result.error || '未知错误'}`);
+      } else {
+        notify('当前已是最新版本', `v${result.currentVersion}`);
+        addLog('Info', `当前已是最新版本 v${result.currentVersion}。`);
+      }
+    } catch (error) {
+      notify('检查更新失败', error instanceof Error ? error.message : '未知错误', 'error');
+      addLog('Warn', `检查更新失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setCheckingUpdate(false);
+    }
+  }
+
+  async function startUpdate() {
+    if (!native || !updateInfo) return;
+    const result = await nativeInvoke<{ ok: boolean; message?: string }>('startUpdate');
+    if (!result.ok) throw new Error(result.message || '无法启动更新程序。');
+    setModal(null);
+    notify('正在更新', result.message || '更新程序已启动，本窗口即将关闭。');
+    addLog('Info', `已启动更新程序，目标版本 v${updateInfo.latestVersion ?? ''}。`);
+  }
+
+  async function skipUpdateVersion() {
+    const version = updateInfo?.latestVersion;
+    if (!native || !version) return;
+    const state = await nativeInvoke<any>('skipUpdateVersion', { version });
+    applyNativeState(state as NativeState);
+    setUpdateInfo(null);
+    setModal(null);
+    notify('已跳过此版本', `自动检查不会再提示 v${version}。`);
+    addLog('Info', `已跳过版本 v${version}。`);
+  }
+
   /** 启动指定游戏：路径缺失时先让用户补路径，其余流程与原来一致。 */
   function handleLaunch(game: GameId = displayGameRef.current) {
     if (launchState === 'launching') return;
@@ -489,8 +556,10 @@ export function useAppState() {
     attachedPid, runningGame, attachedGame, activeRunning, activeAttached,
     currentFps, starRailRegistryFps, runningPids, isElevated, needsAdmin, elevating, autostart, version, effectiveEnabled, readiness,
     stubStatus, stubLastError, antiBlurState, hideUidState,
+    updateInfo, checkingUpdate,
     importRef, sidebarRef, addLog, notify, navigate, applyNativeState, updateConfig, updateGameConfig, openPathDialog, beginLaunch,
     restartElevated, startUninstall, handleLaunch, exportConfig, importConfig, exportLogs,
+    checkForUpdates, startUpdate, skipUpdateVersion,
     savePath, browsePath, autoLocatePath,
   };
 }

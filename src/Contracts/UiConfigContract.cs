@@ -47,4 +47,6 @@ public sealed class UnlockerConfigDto
 
     public int LogRetainDays { get; init; } = 14;
     public bool SuppressAdminHint { get; init; }
+    public bool AutoCheckUpdate { get; init; } = true;
+    public string? SkipUpdateVersion { get; init; }
 }

@@ -141,6 +141,7 @@ function Test-PackagingProfile {
     $displayName = Get-HostConst 'src/Core/AppPaths.cs' 'ProductDisplayName'  # 用户可见品牌名
     $exeName = Get-HostConst 'src/Core/AppPaths.cs' 'ExecutableFileName'
     $uninstName = Get-HostConst 'src/Core/AppPaths.cs' 'UninstallerFileName'
+    $updaterName = Get-HostConst 'src/Core/AppPaths.cs' 'UpdaterFileName'
     $taskName = Get-HostConst 'src/Core/Autostart.cs' 'ElevatedTaskName'
 
     $bad = [System.Collections.Generic.List[string]]::new()
@@ -158,6 +159,7 @@ function Test-PackagingProfile {
     Want 'shortcutName 与品牌名一致' ($cfg.shortcutName -eq $displayName) "$($cfg.shortcutName)"
     Want 'title 与品牌名一致' ($cfg.title -eq $displayName) "$($cfg.title)"
     Want 'uninstallName 与宿主 UninstallerFileName 一致' ($cfg.uninstallName -eq $uninstName) "$($cfg.uninstallName) vs $uninstName"
+    Want 'updaterName 与宿主 UpdaterFileName 一致' ($cfg.updaterName -eq $updaterName) "$($cfg.updaterName) vs $updaterName"
 
     # 2) 内部标识与卸载路径使用当前产品名
     Want 'regName 与宿主 ProductName 一致' ($cfg.regName -eq $productName) "$($cfg.regName) vs $productName"

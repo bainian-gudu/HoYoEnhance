@@ -12,11 +12,15 @@ internal sealed partial class UiBridge
         switch (method)
         {
             case "getBootstrap":
+            {
+                _uiBootstrapCompleted = true;
                 return Task.FromResult<object?>(new
                 {
                     state = BuildStateObject(),
                     logs = ReadRecentLogs(),
+                    updateNotice = BuildUpdateNoticePayload(TakePendingUpdateNotice()),
                 });
+            }
 
             case "patchConfig":
                 return Task.FromResult<object?>(PatchConfig(p));
@@ -253,6 +257,35 @@ internal sealed partial class UiBridge
                     catch (Exception ex) { AppLog.Debug("setUiTheme: " + ex.Message); }
                 });
                 return Task.FromResult<object?>(new { ok = true, theme = dark ? "dark" : "light" });
+            }
+
+            case "checkUpdate":
+                return CheckUpdateForUiAsync();
+
+            case "startUpdate":
+            {
+                var ok = UpdateService.TryLaunchUpdater(out var error);
+                if (ok)
+                {
+                    // 先让响应回到页面，再静默退出宿主（不驻留托盘）；更新器会在当前目录完成替换。
+                    _form.BeginInvoke(() => _form.RequestExit());
+                }
+
+                return Task.FromResult<object?>(new
+                {
+                    ok,
+                    message = ok ? "已启动更新程序，本窗口即将关闭。" : error,
+                });
+            }
+
+            case "skipUpdateVersion":
+            {
+                var version = p["version"]?.GetValue<string>()?.Trim();
+                if (!string.IsNullOrWhiteSpace(version) && !UpdateService.TryParseVersion(version, out _))
+                    throw new InvalidOperationException("版本号格式无效");
+                _config.SkipUpdateVersion = string.IsNullOrWhiteSpace(version) ? null : version;
+                SaveConfig();
+                return Task.FromResult<object?>(BuildStateObject());
             }
 
             default:

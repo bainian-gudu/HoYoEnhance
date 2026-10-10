@@ -182,6 +182,8 @@ export const DEFAULT_CONFIG: UnlockerConfig = {
   logLevel: 'Debug',
   logRetainDays: 14,
   suppressAdminHint: false,
+  autoCheckUpdate: true,
+  skipUpdateVersion: null,
 };
 
 /** 默认配置的深拷贝（games 是嵌套对象，浅拷贝会共享同一份档案）。 */
@@ -211,6 +213,8 @@ export const CONFIG_LABELS: Record<keyof UnlockerConfig, string> = {
   logLevel: '最低日志级别',
   logRetainDays: '日志保留天数',
   suppressAdminHint: '隐藏管理员权限提醒',
+  autoCheckUpdate: '自动检查更新',
+  skipUpdateVersion: '跳过更新版本',
 };
 
 export const GAME_CONFIG_LABELS: Record<keyof GameProfile, string> = {
@@ -309,6 +313,16 @@ export function parseConfig(value: unknown): UnlockerConfig {
       throw new Error('不支持的日志级别。');
     }
     next.logLevel = input.logLevel as LogLevel;
+  }
+  if ('skipUpdateVersion' in input) {
+    const value = input.skipUpdateVersion;
+    if (value === null || value === '') {
+      next.skipUpdateVersion = null;
+    } else if (typeof value === 'string' && value.length <= 64) {
+      next.skipUpdateVersion = value.trim().replace(/^v/i, '');
+    } else {
+      throw new Error('skipUpdateVersion 必须是版本号字符串或 null。');
+    }
   }
   if ('activeGame' in input) {
     if (!isGameId(input.activeGame)) throw new Error('activeGame 必须是 genshin 或 starRail。');

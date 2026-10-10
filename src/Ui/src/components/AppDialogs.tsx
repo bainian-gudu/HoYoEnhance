@@ -1,6 +1,6 @@
 import { AnimatePresence } from 'framer-motion';
 import type { AppState } from '../hooks/useAppState';
-import { ConfirmDialog, LaunchDialog, PathDialog, SafetyDialog } from '../components/Dialogs';
+import { ConfirmDialog, LaunchDialog, PathDialog, SafetyDialog, UpdateDialog } from '../components/Dialogs';
 import { GAME_META, createDefaultConfig } from '../lib/config';
 import type { NativeState } from '../lib/native';
 import { nativeInvoke } from '../lib/native';
@@ -9,7 +9,7 @@ import { nativeInvoke } from '../lib/native';
 export function AppDialogs({ app }: { app: AppState }) {
   const {
     native, config, modalGame, setConfig, modal, setModal, logs, setLogs, notify, applyNativeState, beginLaunch,
-    startUninstall, savePath, browsePath, autoLocatePath,
+    startUninstall, savePath, browsePath, autoLocatePath, updateInfo, startUpdate, skipUpdateVersion,
   } = app;
 
   return (
@@ -22,7 +22,7 @@ export function AppDialogs({ app }: { app: AppState }) {
         } else {
           setConfig((c) => ({ ...c, safetyNoticeAcknowledged: true, showSafetyNoticeOnStartup: showOnStartup }));
         }
-        setModal(null);
+        setModal(updateInfo ? 'update' : null);
       }} />}
       {modal === 'launch' && <LaunchDialog key={`launch-${modalGame}`} game={modalGame} config={config} isNative={native} onClose={() => setModal(null)} onStart={async (dontAskAgain) => {
         if (native) {
@@ -45,6 +45,7 @@ export function AppDialogs({ app }: { app: AppState }) {
       }} />}
       {modal === 'uninstall' && <ConfirmDialog key="uninstall" title="卸载本软件？" description="将启动安装器（Kachina）的卸载向导：清理程序文件、桌面与开始菜单快捷方式、开机自启动（注册表项与管理员计划任务），以及「安装的应用」中的卸载登记。可在向导中选择是否同时删除配置与日志。此操作不可自动撤销。" action="开始卸载" onClose={() => setModal(null)} onConfirm={async () => { setModal(null); await startUninstall(); }} />}
       {modal === 'clearLogs' && <ConfirmDialog key="clear-logs" title="清空日志列表？" description={`当前列表中的 ${logs.length} 条记录将从界面清除（桌面版不会删除磁盘日志文件）。`} action="清空列表" onClose={() => setModal(null)} onConfirm={() => { setLogs([]); setModal(null); notify('日志列表已清空'); }} />}
+      {modal === 'update' && updateInfo && <UpdateDialog key={`update-${updateInfo.latestVersion}`} update={updateInfo} onClose={() => setModal(null)} onUpdate={startUpdate} onSkip={skipUpdateVersion} />}
     </AnimatePresence>
   );
 }

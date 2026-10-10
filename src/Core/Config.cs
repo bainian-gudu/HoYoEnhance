@@ -97,6 +97,13 @@ internal sealed partial class AppConfig
     /// <summary>是否隐藏界面上的「建议管理员运行」提示条（默认显示；可在设置中关闭）。</summary>
     public bool SuppressAdminHint { get; set; } = false;
 
+    /// <summary>启动后自动检查 GitHub Releases 是否有新版本（默认开启）。</summary>
+    public bool AutoCheckUpdate { get; set; } = true;
+
+    /// <summary>用户选择跳过的版本；自动检查命中时不再弹窗，手动检查仍会提示。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SkipUpdateVersion { get; set; }
+
 
     /// <summary>配置文件完整路径（不序列化）。</summary>
     [JsonIgnore]
@@ -147,5 +154,7 @@ internal sealed partial class AppConfig
         PollIntervalMs = Math.Clamp(PollIntervalMs, 200, 10000);
         LogRetainDays = Math.Clamp(LogRetainDays, 1, 90);
         if (string.IsNullOrWhiteSpace(LogLevel)) LogLevel = "Debug";
+        if (string.IsNullOrWhiteSpace(SkipUpdateVersion)) SkipUpdateVersion = null;
+        else SkipUpdateVersion = SkipUpdateVersion.Trim().TrimStart('v', 'V');
     }
 }

@@ -30,6 +30,9 @@ internal static class AppPaths
     /// <summary>当前卸载程序文件名。</summary>
     public const string UninstallerFileName = ProductDisplayName + ".uninst.exe";
 
+    /// <summary>当前在线更新程序文件名（由安装器写入安装目录）。</summary>
+    public const string UpdaterFileName = ProductDisplayName + ".update.exe";
+
     /// <summary>窗口标题。</summary>
     public const string ProductTitle = ProductDisplayName;
 
@@ -65,6 +68,9 @@ internal static class AppPaths
 
     /// <summary>Kachina 写入的卸载程序（开始菜单「卸载」快捷方式指向它）。</summary>
     public static string UninstExePath => Path.Combine(ExeDirectory, UninstallerFileName);
+
+    /// <summary>安装目录内的在线更新程序。</summary>
+    public static string UpdaterPath => Path.Combine(ExeDirectory, UpdaterFileName);
 
     private static string? _dataDirectory;
     private static readonly object DataDirLock = new();

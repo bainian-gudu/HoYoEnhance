@@ -163,6 +163,10 @@ internal sealed partial class MainForm
         menu.Items.Add(_trayAntiBlurDofItem);
         menu.Items.Add(MakeSep());
 
+        // —— 在线更新 ——
+        menu.Items.Add(MakeActionItem("检查更新", (_, _) => _bridge.CheckUpdateFromTray()));
+        menu.Items.Add(MakeSep());
+
         // —— 退出 ——
         menu.Items.Add(MakeActionItem("退出", (_, _) =>
         {

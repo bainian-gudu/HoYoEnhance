@@ -41,6 +41,14 @@ internal sealed partial class UiBridge : IDisposable
     private int _liveLogSeq;
     /// <summary>增量推送失败过一次就停手，等下次 Attach 再恢复（见 PushLog 注释）。</summary>
     private bool _logPushBroken;
+    /// <summary>页面是否已完成首次导航，可以接收主动更新通知。</summary>
+    private bool _uiReady;
+    /// <summary>前端是否已取走 bootstrap，之后的事件才能安全主动推送。</summary>
+    private bool _uiBootstrapCompleted;
+    /// <summary>本 WebView 会话是否已经跑过启动自动检查。</summary>
+    private bool _autoUpdateCheckStarted;
+    /// <summary>页面尚未就绪时暂存的托盘 / 自动更新结果。</summary>
+    private (string Source, UpdateCheckResult Result)? _pendingUpdateNotice;
 
     public UiBridge(AppConfig config, UnlockService service, MainForm form)
     {
@@ -61,6 +69,8 @@ internal sealed partial class UiBridge : IDisposable
         _webView = webView;
         _lastStateJson = null;  // 新 webview 没收到过任何状态，作废去重缓存
         _logPushBroken = false; // 新 webview 重新允许增量日志
+        _uiReady = false;
+        _uiBootstrapCompleted = false;
         webView.CoreWebView2.WebMessageReceived += OnWebMessageReceived;
     }
 
@@ -93,6 +103,15 @@ internal sealed partial class UiBridge : IDisposable
     /// 前端在 native.ts 的 onNativeNavigate 里监听；webview 未就绪时静默跳过。
     /// </summary>
     public void ResetUiPage() => Post(new { type = "navigate", page = "overview" });
+
+    /// <summary>
+    /// 首次导航完成后调用：先补发页面加载期间拿到的更新结果，再按配置启动自动检查。
+    /// </summary>
+    public void MarkUiReady()
+    {
+        _uiReady = true;
+        StartAutoUpdateCheck();
+    }
 
     /// <summary>
     /// 把一条宿主日志增量推给前端日志页。

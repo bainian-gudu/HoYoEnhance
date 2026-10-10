@@ -69,6 +69,11 @@ internal sealed partial class UiBridge
                 _config.SafetyNoticeAcknowledged = ack.GetValue<bool>();
             if (p["suppressAdminHint"] is JsonNode adm)
                 _config.SuppressAdminHint = adm.GetValue<bool>();
+            if (p["autoCheckUpdate"] is JsonNode autoUpdate)
+            {
+                _config.AutoCheckUpdate = autoUpdate.GetValue<bool>();
+                if (_config.AutoCheckUpdate) StartAutoUpdateCheck();
+            }
 
             if (p["autoStartWithWindows"] is not null || p["autoStartAsAdministrator"] is not null)
                 _service.SyncAutostart();
@@ -167,6 +172,14 @@ internal sealed partial class UiBridge
         SetBool(root, "showSafetyNoticeOnStartup", v => _config.ShowSafetyNoticeOnStartup = v);
         SetBool(root, "safetyNoticeAcknowledged", v => _config.SafetyNoticeAcknowledged = v);
         SetBool(root, "suppressAdminHint", v => _config.SuppressAdminHint = v);
+        SetBool(root, "autoCheckUpdate", v => _config.AutoCheckUpdate = v);
+        if (root.TryGetProperty("skipUpdateVersion", out var skipUpdate)
+            && skipUpdate.ValueKind is JsonValueKind.String or JsonValueKind.Null)
+        {
+            _config.SkipUpdateVersion = skipUpdate.ValueKind == JsonValueKind.Null
+                ? null
+                : skipUpdate.GetString();
+        }
         if (root.TryGetProperty("pollIntervalMs", out var poll) && poll.TryGetInt32(out var pms))
             _config.PollIntervalMs = Math.Clamp(pms, 200, 10000);
         if (root.TryGetProperty("logRetainDays", out var days) && days.TryGetInt32(out var d))
@@ -238,6 +251,8 @@ internal sealed partial class UiBridge
         to.LogLevel = from.LogLevel;
         to.LogRetainDays = from.LogRetainDays;
         to.SuppressAdminHint = from.SuppressAdminHint;
+        to.AutoCheckUpdate = from.AutoCheckUpdate;
+        to.SkipUpdateVersion = from.SkipUpdateVersion;
     }
 
     private void SaveConfig()
@@ -290,6 +305,8 @@ internal sealed partial class UiBridge
         LogLevel = _config.LogLevel,
         LogRetainDays = _config.LogRetainDays,
         SuppressAdminHint = _config.SuppressAdminHint,
+        AutoCheckUpdate = _config.AutoCheckUpdate,
+        SkipUpdateVersion = _config.SkipUpdateVersion,
     };
 
     private static object ReadRecentLogs()

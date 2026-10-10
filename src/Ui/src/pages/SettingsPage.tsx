@@ -91,6 +91,7 @@ export function SettingsPage({ game, gameConfig, updateGameConfig, config, updat
         {config.autoStartWithWindows && autostartNotice && <p className={`settings-small-note${autostart.notice ? ' is-warning' : ''}`}><ShieldCheck size={14} />{autostartNotice}</p>}
         <ToggleRow title="启动后最小化到托盘" description="开启：启动、最小化和关闭都驻留托盘；关闭：启动显示窗口，最小化到任务栏，关闭窗口退出程序" checked={config.startMinimized} onChange={(value) => updateConfig('startMinimized', value)} />
         <ToggleRow title="启动时显示用户协议" description="每次手动启动时展示用户协议与安全声明" checked={config.showSafetyNoticeOnStartup} onChange={(value) => updateConfig('showSafetyNoticeOnStartup', value)} />
+        <ToggleRow title="自动检查更新" description="启动后从项目官方 GitHub Releases 检查新版本；也可随时在关于页或托盘菜单手动检查" checked={config.autoCheckUpdate} onChange={(value) => updateConfig('autoCheckUpdate', value)} />
         {isNative && <ToggleRow title="隐藏管理员权限提醒" description="关闭后，概览页不再显示「以管理员重新启动」提示条" checked={config.suppressAdminHint} onChange={(value) => updateConfig('suppressAdminHint', value)} />}
         {isNative && (
           <div className="setting-row admin-setting-row">

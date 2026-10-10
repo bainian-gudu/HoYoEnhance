@@ -41,6 +41,14 @@ describe('parseConfig', () => {
     expect(parseConfig({ autoWatch: false }).autoWatch).toBe(true);
   });
 
+  it('parses update preferences and normalizes the skipped version', () => {
+    const config = parseConfig({ autoCheckUpdate: false, skipUpdateVersion: 'v1.2.3' });
+    expect(config.autoCheckUpdate).toBe(false);
+    expect(config.skipUpdateVersion).toBe('1.2.3');
+    expect(parseConfig({ skipUpdateVersion: null }).skipUpdateVersion).toBeNull();
+    expect(() => parseConfig({ skipUpdateVersion: 123 })).toThrow('skipUpdateVersion');
+  });
+
   it('rejects invalid booleans and ranges', () => {
     expect(() => parseConfig({ masterEnabled: 'yes' })).toThrow('masterEnabled 必须为 true 或 false');
     expect(() => parseConfig({ pollIntervalMs: 10 })).toThrow('pollIntervalMs 必须是 200 至 10000 之间的整数');

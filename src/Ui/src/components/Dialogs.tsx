@@ -1,8 +1,9 @@
 /** 应用对话框：游戏路径设置、用户协议与安全声明、启动确认与通用危险操作确认。 */
-import { ArrowUpRight, Check, CircleHelp, FileCode2, FolderOpen, Info, Monitor, Play, ScanLine, ShieldCheck, TriangleAlert } from 'lucide-react';
+import { ArrowUpRight, Check, CircleHelp, Download, FileCode2, FolderOpen, Info, Monitor, Play, ScanLine, ShieldCheck, TriangleAlert } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { GAME_META, THIRD_PARTY_DISCLAIMER, cleanPath, gamePathHint, isValidGamePath, PROJECT_URL } from '../lib/config';
 import type { GameId, UnlockerConfig } from '../lib/config';
+import type { UpdateCheckResult } from '../lib/native';
 import { nativeInvoke } from '../lib/native';
 import { Checkbox, Modal } from './ui';
 
@@ -138,4 +139,35 @@ export function ConfirmDialog({ title, description, action, onConfirm, onClose }
   const [busy, setBusy] = useState(false);
   return <Modal title={title} icon={TriangleAlert} onClose={onClose}
     footer={<><button className="button button-quiet" onClick={onClose} disabled={busy}>取消</button><button className="button button-danger" disabled={busy} onClick={() => { void (async () => { setBusy(true); try { await onConfirm(); } finally { setBusy(false); } })(); }}>{action}</button></>}><p className="confirmation-description">{description}</p></Modal>;
+}
+
+/** 新版本提示：展示版本号与发行说明，并交棒给安装目录里的更新程序。 */
+export function UpdateDialog({ update, onUpdate, onSkip, onClose }: {
+  update: UpdateCheckResult;
+  onUpdate: () => void | Promise<void>;
+  onSkip: () => void | Promise<void>;
+  onClose: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const latest = update.latestVersion ?? '未知版本';
+  return (
+    <Modal title={`发现新版本 v${latest}`} description="更新程序会从项目官方 GitHub Releases 下载并替换当前安装。" icon={Download} onClose={onClose} wide
+      footer={<>
+        {update.releaseUrl && <a className="text-button muted" href={update.releaseUrl} target="_blank" rel="noreferrer">查看发行页面<ArrowUpRight size={14} /></a>}
+        <button className="button button-quiet" onClick={onClose} disabled={busy}>稍后</button>
+        <button className="button button-secondary" disabled={busy} onClick={() => { void (async () => { setBusy(true); try { await onSkip(); } finally { setBusy(false); } })(); }}>跳过此版本</button>
+        <button className="button button-primary" disabled={busy} onClick={() => { void (async () => { setBusy(true); try { await onUpdate(); } finally { setBusy(false); } })(); }}><Download size={15} />{busy ? '正在启动…' : '立即更新'}</button>
+      </>}>
+      <div className="update-summary">
+        <div><span>当前版本</span><strong>v{update.currentVersion}</strong></div>
+        <ArrowUpRight size={17} />
+        <div><span>最新版本</span><strong>v{latest}</strong></div>
+      </div>
+      <div className="update-notes">
+        <h3>更新说明</h3>
+        <pre>{update.notes || '本次发行没有填写更新说明。'}</pre>
+      </div>
+      <div className="subtle-notice"><Info size={16} /><p>更新会关闭当前窗口；请先保存正在进行的工作。下载、校验与文件替换由安装器完成。</p></div>
+    </Modal>
+  );
 }

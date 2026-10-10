@@ -23,6 +23,7 @@ internal sealed partial class MainForm
                     ContextMenuStrip = new ContextMenuStrip(),
                 };
                 _tray.ContextMenuStrip.Items.Add("显示主界面", null, (_, _) => RestoreFromTrayPublic());
+                _tray.ContextMenuStrip.Items.Add("检查更新", null, (_, _) => _bridge.CheckUpdateFromTray());
                 _tray.ContextMenuStrip.Items.Add("退出", null, (_, _) => { _reallyExit = true; Close(); });
                 _tray.DoubleClick += (_, _) => RestoreFromTrayPublic();
             }

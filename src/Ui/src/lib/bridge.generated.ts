@@ -36,6 +36,8 @@ export interface UnlockerConfig {
   logLevel: LogLevel;
   logRetainDays: number;
   suppressAdminHint: boolean;
+  autoCheckUpdate: boolean;
+  skipUpdateVersion: string | null;
 }
 
 export interface GameDefinition {

@@ -113,6 +113,7 @@ internal sealed partial class MainForm : Form
             _webReady = true;
             UiStyle.ApplyBackdrop(this, UiStyle.IsUiDark);
             _bridge.PushState();
+            _bridge.MarkUiReady();
             AppLog.Info("Web UI ready");
         };
 

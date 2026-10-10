@@ -112,6 +112,9 @@ internal sealed partial class MainForm : Form
         WireLoadHandler();
 
         WireWindowEvents();
+
+        // 启动进托盘时 WebView 会延后创建，更新检查不跟着界面一起延后。
+        _bridge.StartAutoUpdateCheck();
     }
 
     public void RequestExit()

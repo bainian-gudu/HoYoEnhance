@@ -22,6 +22,7 @@ internal static class Program
         WindowTrayPolicyTests.Run(harness);
         WindowSizePolicyTests.Run(harness);
         InjectionSessionPolicyTests.Run(harness);
+        UpdateServiceTests.Run(harness);
         return harness.Report();
     }
 }

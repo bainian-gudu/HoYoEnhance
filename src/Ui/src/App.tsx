@@ -42,7 +42,7 @@ export default function App() {
               {page === 'settings' && <SettingsPage game={app.activeGame} gameConfig={app.gameConfig} updateGameConfig={app.updateGameConfig} config={config} updateConfig={updateConfig} onPath={() => app.openPathDialog(app.activeGame)} onExport={exportConfig} onImport={() => importRef.current?.click()} onReset={() => setModal('reset')} onUninstall={native ? () => setModal('uninstall') : undefined} busy={launchState === 'launching' || elevating} isNative={native} isElevated={isElevated} onRestartElevated={native && !isElevated ? () => void restartElevated() : undefined} elevating={elevating} autostart={app.autostart} />}
               {page === 'logs' && <LogsPage logs={logs} onClear={() => setModal('clearLogs')} onExport={exportLogs} isNative={native} onOpenFolder={native ? () => { void nativeInvoke('openLogFolder').catch(() => undefined); } : undefined} />}
               {page === 'guide' && <GuidePage game={app.activeGame} navigate={navigate} onSafety={() => setModal('safety')} isNative={native} />}
-              {page === 'about' && <AboutPage onSafety={() => setModal('safety')} version={version} isNative={native} onUninstall={native ? () => setModal('uninstall') : undefined} />}
+              {page === 'about' && <AboutPage onSafety={() => setModal('safety')} version={version} isNative={native} onUninstall={native ? () => setModal('uninstall') : undefined} onCheckUpdate={native ? app.checkForUpdates : undefined} checkingUpdate={app.checkingUpdate} />}
             </motion.main>
           </AnimatePresence>
           <StatusBar app={app} />

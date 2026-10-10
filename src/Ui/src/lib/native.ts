@@ -48,6 +48,22 @@ export type AutostartState = {
   notice: string | null;
 };
 
+export type UpdateCheckResult = {
+  status: 'available' | 'up-to-date' | 'error';
+  currentVersion: string;
+  latestVersion: string | null;
+  title: string | null;
+  notes: string | null;
+  releaseUrl: string | null;
+  publishedAt: string | null;
+  error: string | null;
+};
+
+export type NativeUpdateEvent = {
+  source: 'auto' | 'tray';
+  update: UpdateCheckResult;
+};
+
 type Pending = {
   resolve: (value: unknown) => void;
   reject: (reason?: unknown) => void;
@@ -75,6 +91,7 @@ let listenersReady = false;
 const stateListeners = new Set<(state: NativeState) => void>();
 const logListeners = new Set<(entry: LogEntry) => void>();
 const navigateListeners = new Set<(page: Page) => void>();
+const updateListeners = new Set<(event: NativeUpdateEvent) => void>();
 
 export function isNativeHost(): boolean {
   return Boolean(window.chrome?.webview) || Boolean(window.genshinNative);
@@ -124,6 +141,15 @@ function ensureListeners() {
     if (data.type === 'log' && data.entry) {
       const entry = normalizeLog(data.entry);
       logListeners.forEach((fn) => fn(entry));
+      return;
+    }
+
+    if (data.type === 'update' && data.update) {
+      const event: NativeUpdateEvent = {
+        source: data.source === 'tray' ? 'tray' : 'auto',
+        update: normalizeUpdate(data.update),
+      };
+      updateListeners.forEach((fn) => fn(event));
       return;
     }
 
@@ -187,6 +213,20 @@ function normalizeLog(raw: any): LogEntry {
   };
 }
 
+function normalizeUpdate(raw: any): UpdateCheckResult {
+  const status = raw?.status === 'available' || raw?.status === 'up-to-date' ? raw.status : 'error';
+  return {
+    status,
+    currentVersion: String(raw?.currentVersion ?? ''),
+    latestVersion: typeof raw?.latestVersion === 'string' ? raw.latestVersion : null,
+    title: typeof raw?.title === 'string' ? raw.title : null,
+    notes: typeof raw?.notes === 'string' ? raw.notes : null,
+    releaseUrl: typeof raw?.releaseUrl === 'string' ? raw.releaseUrl : null,
+    publishedAt: typeof raw?.publishedAt === 'string' ? raw.publishedAt : null,
+    error: typeof raw?.error === 'string' ? raw.error : null,
+  };
+}
+
 export function onNativeState(listener: (state: NativeState) => void): () => void {
   ensureListeners();
   stateListeners.add(listener);
@@ -197,6 +237,12 @@ export function onNativeLog(listener: (entry: LogEntry) => void): () => void {
   ensureListeners();
   logListeners.add(listener);
   return () => logListeners.delete(listener);
+}
+
+export function onNativeUpdate(listener: (event: NativeUpdateEvent) => void): () => void {
+  ensureListeners();
+  updateListeners.add(listener);
+  return () => updateListeners.delete(listener);
 }
 
 /** 宿主请求切换页面（见 UiBridge.ResetUiPage）。 */
@@ -230,10 +276,16 @@ export function nativeInvoke<T = unknown>(method: string, params: Record<string,
   });
 }
 
-export async function nativeGetBootstrap(): Promise<{ state: NativeState; logs: LogEntry[] }> {
-  const result = await nativeInvoke<{ state: any; logs?: any[] }>('getBootstrap');
+export async function nativeGetBootstrap(): Promise<{ state: NativeState; logs: LogEntry[]; updateNotice: NativeUpdateEvent | null }> {
+  const result = await nativeInvoke<{ state: any; logs?: any[]; updateNotice?: any }>('getBootstrap');
   return {
     state: normalizeState(result.state),
     logs: Array.isArray(result.logs) ? result.logs.map(normalizeLog) : [],
+    updateNotice: result.updateNotice?.update
+      ? {
+          source: result.updateNotice.source === 'tray' ? 'tray' : 'auto',
+          update: normalizeUpdate(result.updateNotice.update),
+        }
+      : null,
   };
 }
