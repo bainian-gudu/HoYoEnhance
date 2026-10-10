@@ -70,7 +70,7 @@ export function useAppState() {
   const [needsAdmin, setNeedsAdmin] = useState(false);
   const [elevating, setElevating] = useState(false);
   const [autostart, setAutostart] = useState<AutostartState>({ mode: 'disabled', notice: null });
-  const [version, setVersion] = useState('1.0.0');
+  const [version, setVersion] = useState('1.0.1');
   const importRef = useRef<HTMLInputElement>(null);
   // 每个游戏各自记录上一次已播报的目标帧率，避免切换游戏时误报「帧率已调整」。
   const previousFps = useRef<Record<GameId, number>>({
@@ -131,7 +131,7 @@ export function useAppState() {
     setIsElevated(Boolean(state.isElevated));
     setNeedsAdmin(Boolean(state.needsAdminForUnlock));
     setAutostart(state.autostart);
-    setVersion(state.version || '1.0.0');
+    setVersion(state.version || '1.0.1');
     setLaunchState(state.attachedPid > 0 ? 'running' : 'idle');
   }, []);
 

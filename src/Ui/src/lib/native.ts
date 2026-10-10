@@ -173,7 +173,7 @@ function normalizeState(raw: any): NativeState {
         : 'disabled',
       notice: typeof raw.autostart?.notice === 'string' && raw.autostart.notice ? raw.autostart.notice : null,
     },
-    version: String(raw.version ?? '1.0.0'),
+    version: String(raw.version ?? '1.0.1'),
   };
 }
 
