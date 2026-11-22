@@ -1,0 +1,365 @@
+# HoYoEnhance
+
+> **项目性质（请先读这一段）**
+>
+> - **个人自用**：本项目只为作者自己玩游戏服务，不提供任何形式的对外服务、
+>   不做商业化、不接受付费；仓库公开仅作为个人备份与学习记录。
+> - **AI 辅助开发**：部分代码、界面和文档使用 AI 辅助生成与整理，由作者负责需求确认、
+>   结果验收和风险承担。**UI 使用 gpt-6-astra-max 设计**：界面设计稿由该模型出稿，
+>   代码按稿 1:1 实现。**项目未经独立安全审计，请不要将其视为生产级软件。**
+> - **与米哈游无关**：本项目未获米哈游 / HoYoverse 授权或背书；游戏名称、角色、
+>   图标与场景素材的版权归属详见下文「商标与作品归属」。
+
+同时支持《原神》与《崩坏：星穹铁道》，两款游戏各自独立配置：自定义目标 FPS、反角色虚化、
+移除水下马赛克、隐藏 UID（原神画面效果注入）；星铁走注册表解锁 120 帧，并提供反角色虚化
+与隐藏 UID。检测游戏启动后自动应用 · 托盘设置 · 开机自启（标准权限 / 最高权限计划任务，都不弹 UAC）
+
+界面为 **gpt-6-astra-max** 设计的设计稿一比一实现的 Web UI（WebView2 嵌入）：
+游戏概览 / 游戏设置 / 使用指南 / 日志 / 关于；深浅色切换。
+
+开启「启动后最小化到托盘」后，启动、最小化或关闭窗口都会**驻留系统托盘**；
+关闭该选项时，最小化进入任务栏，关闭窗口退出程序。托盘左键恢复主窗口，右键菜单与界面
+共用「当前游戏」，可随时热切换并自动跟随正在运行的游戏。
+
+## 要求
+
+- **运行**：64 位 **Windows 10**（1607 / 14393 及以上）或 **Windows 11**，x64；
+  需要 **Microsoft Edge WebView2 Runtime**（Win10/11 通常已自带），
+  **.NET Desktop Runtime 9** 与 **VC++ 2015+ x64** 由安装器按配置检测/安装
+  （亦可首次运行时由主程序提示下载）。**不需要** Node / Python 等开发运行时，
+  逐项见下文「依赖说明」。
+- **构建**：.NET 9 SDK、CMake、MSVC（或 VS Build Tools）、Node.js 20+。
+
+## 快速使用
+
+1. 从 Releases 下载最新 HoYoEnhance 安装包，运行安装器并选择安装目录。
+2. 首次启动时按提示安装缺少的 .NET Desktop Runtime、VC++ 或 WebView2 运行库。
+3. 在「游戏设置」中启用帧率解锁并选择目标 FPS（星铁为注册表 120 帧）；启动游戏后保持程序运行即可自动应用。
+4. 开启「启动后最小化到托盘」后，关闭或最小化窗口会进入系统托盘；否则最小化进入任务栏，关闭窗口退出程序。左键托盘图标可恢复窗口。
+
+安装器会创建开始菜单快捷方式、可选的桌面快捷方式和卸载项。卸载时可选择是否同时删除
+配置、日志和 WebView2 缓存；不删除用户数据时，重新安装仍会沿用原设置。便携版直接运行
+压缩包内的 HoYoEnhance 主程序，退出程序后删除整个目录即可。
+
+## 技术栈
+
+| 部分 | 技术 | 位置与说明 |
+| --- | --- | --- |
+| 宿主主程序 | C# / .NET 9（`net9.0-windows10.0.18362.0`）/ WinForms | `src/Host/`：WebView2、托盘、窗口与 UI 外壳；`src/Core/`：配置、定位、解锁、IPC、注册表与注入调度 |
+| WebView2 契约 | C# DTO → TypeScript 生成 | `src/Contracts/` 是桥接配置的唯一事实来源；`tools/contract-gen/` 生成 `src/Ui/src/lib/bridge.generated.ts`，devcheck 强制两端同步 |
+| Web UI | React 19 + TypeScript 5.9 + Vite 7 + Tailwind CSS 4 + framer-motion + lucide-react | `src/Ui/`：设计稿由 **gpt-6-astra-max** 设计、按稿 1:1 实现；`vite-plugin-singlefile` 打成单文件 `ui/index.html` |
+| 注入模块 | C++20（CMake）+ MinHook（BSD-2-Clause），CRT 静态链接（`/MT`） | `src/Stub/`：原神的帧率解锁与反虚化；`src/StubStarRail/`：星铁的反角色虚化与隐藏 UID（`StarRailStub.dll`，帧率仍走注册表）；两者只共用 `src/Common/` 的扫描器与 IPC 协议，业务代码相互独立 |
+| 安装 / 卸载 / 更新器 | 独立项目 [Kirara](https://github.com/bainian-gudu/Kirara) 的 `kirara-builder` 产物 | 本仓库只提供 `packaging/` 的安装包配置与打包脚本 |
+| 构建 / 打包 / 自检 | PowerShell 7 | `build.ps1`、`packaging/pack.ps1`、`tools/devcheck/` |
+| CI | GitHub Actions（`ubuntu-latest` + `windows-latest`） | `devcheck.yml`（push/PR 自动）、`build.yml`（仅手动） |
+
+## 构建
+
+默认构建主程序和安装器。安装器由独立项目 Kirara 产出的 `kirara-builder.exe` 生成：
+本地构建默认按需从 Kirara 源码构建，CI 直接下载它的最新 Release 产物。本仓库的
+打包配置与脚本集中在 [`packaging/`](packaging/)，工具链本身见 Kirara 的 `README.md`。
+
+> 说明：当前主程序、安装包、便携包、快捷方式、界面与窗口标题统一为 **HoYoEnhance**。
+> 为兼容老用户升级与卸载，数据目录、卸载注册表键、IPC / 自启动任务等内部标识仍保留
+> 历史值；安装器会识别旧安装目录与旧文件名，并在升级时清理旧组件、重定向快捷方式。
+
+### 常用命令
+
+```powershell
+# 仅编译 UI + Stub + 主程序（不打包）
+.\build.ps1 -Configuration Release -SkipSetup
+
+# 完整：编译 + 打包离线安装器（首次会按需构建 Kirara 的 kirara-builder）
+.\build.ps1 -Configuration Release
+
+# 只重新打包（dist\ 已存在）
+.\packaging\pack.ps1
+
+# kirara-builder 已构建过 / 指定 Kirara 位置
+.\build.ps1 -SkipBuilderBuild
+.\build.ps1 -KiraraRepo D:\src\Kirara
+
+# 可选：主程序也自包含
+.\build.ps1 -Configuration Release -SelfContained
+```
+
+只修改前端时可在 `src/Ui` 执行 `npm ci` 后运行 `npm run build`。
+本仓库的打包流程与配置项见 [`packaging/README.md`](packaging/README.md)。
+
+### 版本号
+
+版本号的唯一来源是仓库根的 [`VERSION`](VERSION)（纯文本，一行 `X.Y.Z`）。改版本只动
+这一个文件，然后同步派生位置：
+
+```powershell
+pwsh tools/version/sync-version.ps1          # 按 VERSION 同步 app.manifest / 协议 / UI 常量
+pwsh tools/version/sync-version.ps1 -Check   # 只校验（devcheck 与 build 会跑）
+```
+
+程序集版本、`AssemblyVersion` / `FileVersion` / `InformationalVersion` 由
+`Directory.Build.props` 从 `VERSION` 注入；打包脚本、CI 与运行时也只读这个文件。
+devcheck 的 `version` 层会在派生文件与 `VERSION` 不一致时报错。
+
+产物：
+
+```text
+dist\HoYoEnhance.exe
+dist\FpsUnlockerStub.dll
+dist\StarRailStub.dll
+dist\ui\index.html
+
+artifacts\HoYoEnhance.Install.<版本>.exe              # 离线安装器
+artifacts\HoYoEnhance-portable-win-x64.zip            # 便携包（含更新程序）
+artifacts\HoYoEnhance_v<版本>.7z                      # 便携 7z（本机有 7-Zip 时）
+```
+
+打包配置见 [`packaging/packaging.config.json`](packaging/packaging.config.json)
+（默认安装目录、GitHub 在线源、运行库列表）。
+
+## 开发自检（devcheck）
+
+本仓库的 `tools/devcheck` 把**我们真正改过的那部分**（Web UI + Stub + Host + 打包配置）
+放进最小依赖的检查环境，热跑 5–10 秒。
+
+```powershell
+pwsh tools/devcheck/devcheck.ps1                 # all
+pwsh tools/devcheck/devcheck.ps1 -Layer host,contract
+pwsh tools/devcheck/devcheck.ps1 -SelfTest       # 注入错误，确认每层真的会报错
+```
+
+每次 push 由 **Devcheck** 工作流在 ubuntu + windows 双 runner 上自动跑一遍（含 `-SelfTest`）。
+分层清单、各层查什么、覆盖范围与抓不到的东西、维护约定，全部见
+[`tools/devcheck/README.md`](tools/devcheck/README.md)。
+
+## 安装、更新与卸载
+
+安装与卸载由安装包自带的安装器完成。主程序自身不做任何安装 / 卸载动作：文件与注册表
+都由 `uninst.exe` 处理，程序内的「卸载本软件」按钮只负责**拉起**它
+（入口：设置页「高级设置 → 卸载」、关于页底部）。
+
+```powershell
+.\artifacts\HoYoEnhance.Install.<版本>.exe
+```
+
+- 可选安装目录
+- 安装时按 UAC 策略提权；装完后日常运行与开机自启不再弹 UAC
+  （勾上「启动时自动以管理员权限运行」时，登录自启改由任务计划程序登记的最高权限任务拉起）
+- 可自动处理 .NET Desktop Runtime 9 / VCRedist（见配置 `runtimes`）
+- 安装目录生成 **卸载程序**、**更新程序**
+- 安装界面「我已阅读并同意 **用户协议**」可点击，弹窗显示协议全文；配了协议就
+  **必须勾选同意**才能点安装，正文里的外链交给系统浏览器打开，不会把安装器窗口导航走
+
+卸载（四个入口，最终都是同一个卸载器）：
+
+- 程序内：设置页「高级设置 → 卸载 → 卸载本软件」，或关于页底部的「卸载本软件」
+  （弹窗确认后拉起 `uninst.exe` 并退出主程序；便携版没有 `uninst.exe`，会提示直接删目录）
+- 安装目录下的 **卸载程序**
+- 开始菜单里的「Uninstall HoYoEnhance」快捷方式（指向上面那个程序；便携目录没有卸载程序时不再创建）
+- Windows「设置 → 应用 → 安装的应用」/ 控制面板「应用和功能」（安装器写的 ARP 卸载项）
+
+卸载时会一并处理：
+
+- **勾选「同时删除用户数据」** → 删用户数据目录（配置、日志、
+  `EBWebView` 界面缓存）与 `%AppData%\`、`文档\` 下的对应目录，覆盖本机**所有登录过的
+  用户**，外加 `%TEMP%` 里安装期的残留（按固定文件名白名单）。**不勾选则一个数据目录都不碰**，
+  只删快捷方式与开始菜单里的产品文件夹；重装后可沿用原设置。
+- 主程序还在运行时（常驻托盘很常见）会先询问并结束进程，否则文件被占用删不掉。
+- 开机自启项与快捷方式（含当前快捷方式与历史快捷方式名）按配置一并删除，**不需要先手动关自启动**：
+  普通权限自启是 `HKCU\...\Run` 下的值，管理员自启是任务计划程序里的
+  管理员自启计划任务（配置项 `extraUninstallScheduledTasks`）。
+- 所有「按配置删除」的通道都有安全阀（共享注册表容器不整棵删、路径必须绝对且不在系统目录内、
+  不碰盘符根与 `Program Files` 这类受保护目录），命中的只记日志并跳过，不会让卸载失败。
+
+已知边界：被 OneDrive 重定向过的 `文档` / `AppData` 只能命中当前用户那一份。
+打包配置见 [`packaging/README.md`](packaging/README.md)。
+
+在线更新：启动后默认自动检查新版本（可在设置中关闭），关于页与托盘菜单也可手动检查。
+发现新版本时展示版本号与发行说明，确认后由安装目录中的更新程序从 GitHub Releases
+下载并替换；选择「跳过此版本」只影响后续自动提示。宿主已提权时，更新器继承当前管理员
+令牌，不会重复弹出 UAC。
+
+## 依赖说明
+
+| 依赖 | 处理方式 |
+|------|----------|
+| 应用托管程序集 / 资源 | 打进安装包 |
+| `FpsUnlockerStub.dll` / `StarRailStub.dll` + MinHook | 打进安装包；CRT **静态链接**（/MT） |
+| 安装器 / 卸载器 / 更新器 | 安装包自带（`Install` / `uninst` / `update`） |
+| .NET Desktop Runtime 9 x64 | 安装器 `runtimes`；亦可首次运行提示 |
+| VC++ 2015+ x64 | 安装器 `runtimes`（通常 Stub 已静态 CRT） |
+| Node / Python 等 | **不需要、不安装** |
+
+## 配置
+
+- 路径：用户数据目录下的 `config.json`
+- 原子写入（临时文件 + `File.Replace`）并保留 `config.json.bak`
+- 主文件损坏时自动从 `.bak` / 临时文件恢复
+- 若 LocalAppData 不可写，依次尝试 AppData、文档目录
+
+## 运行行为
+
+这些行为容易被误解，写清楚省得猜：
+
+- **单实例**：优先用 `Global\` 互斥体（跨会话更稳），拿不到就回退 `Local\`。
+  同一用户在两个会话里（例如控制台 + 远程桌面）只会跑一个实例，第二次启动
+  会唤醒已有实例的主窗口，而不是再开一个；不同用户互不影响。
+  二次点击快捷方式同样是「唤醒并打开主界面」。
+- **系统睡眠**：只有在游戏被解锁期间才请求「系统不要自动睡眠」；程序常驻托盘
+  本身**不会**阻止睡眠。手动睡眠任何时候都可用。
+- **关闭解锁**：关掉「帧率解锁」或总开关时，注入模块会把帧率**写回游戏自身的
+  档位**（它 Hook 了游戏的 setter 来记录这个值），不是单纯停止写入。
+- **日志**：文件按天切分，跨日自动写到新的 `app-yyyyMMdd.log`；保留天数由
+  `logRetainDays` 控制。界面「日志」页实时显示宿主日志（增量推送），
+  关闭调试日志后只保留 Info 及以上。
+- **提权**：日常运行 `asInvoker`，不弹 UAC；只有主动点「以管理员重新启动」才弹一次，
+  在 UAC 上点「否」会原样恢复单实例状态（不会留下「还能再开一个」的窗口期）。
+  **已提权且程序目录不在 `Program Files` 下时，会拒绝注入、也拒绝拉起卸载器与更新器** ——
+  用户可写目录里的同名文件可能借管理员令牌执行。处置办法：装到 `Program Files`，
+  或退出管理员实例后按普通权限运行。
+- **开机自启动**：两种登记方式**二选一，不会同时存在**（同时存在会在登录时拉起两个实例）。
+  只开「开机自启动」→ 写 `HKCU\...\Run`，登录后以标准权限运行；
+  同时开「启动时自动以管理员权限运行」→ 改登记任务计划程序里的
+  管理员自启任务（`RunLevel=HighestAvailable`，触发器绑定当前用户 SID），
+  登录即以管理员权限启动且**不弹 UAC**。登记计划任务要求程序装在 `Program Files` 下、
+  可执行文件通过信任校验、且当前进程是管理员；任一条件不满足就退回 `HKCU\...\Run`，
+  并把原因显示在设置页（不静默失败）。关闭开关与卸载时两条通道都会回收。
+
+## 布局
+
+```text
+{安装目录}\                         # 默认 Program Files 下
+  HoYoEnhance.exe
+  FpsUnlockerStub.dll
+  StarRailStub.dll
+  ui\index.html                   # Web UI（WebView2 加载）
+  <卸载程序>.exe                   # 卸载
+  <更新程序>.exe                   # 更新（可选）
+
+{用户数据目录}\
+  config.json
+  logs\
+```
+
+## CI
+
+两个工作流：
+
+| 工作流 | 触发 | 内容 | 耗时 |
+| --- | --- | --- | --- |
+| **Devcheck**（`.github/workflows/devcheck.yml`） | push 到 main / PR / 手动，**自动执行** | `tools/devcheck` 全部检查层 + 自检 + Web UI 构建，ubuntu 与 windows 双 runner | 几分钟 |
+| **Build**（`.github/workflows/build.yml`） | **仅手动**（Actions → Build → Run workflow） | 下载 Kirara 最新 Release 的 `kirara-builder` → 应用本体 → 打包安装器 → Windows 安装 / 更新 / 卸载 / 便携包 E2E | 几分钟起 |
+
+CI 的安装器工具链**只从独立项目 Kirara 的最新 Release 下载** `kirara-builder.exe`
+（Kirara 自己的发布流程负责从源码构建并挂出产物）；本仓库 CI 不再检出 Kirara 源码、
+也不再现场编译 Rust。这条约束由 devcheck 的 `vendor` 层自动断言。
+
+**Build** 依次跑 `build-builder`（下载 Kirara 最新 Release 的 `kirara-builder.exe`）→
+`build-app` → `pack` → `package-e2e`，可选 `host_mode=self-contained` 打全量自包含
+主程序；`package-e2e` 会拿刚打出的真实安装包在 Windows runner 上验证离线安装、重复
+安装、离线更新、卸载保留用户数据和便携包诊断启动。产物与本地构建一致，挂在 Release
+上。把 `Install` 包发布到 Release 且 tag 为 `v{version}` 后，配置里的 GitHub 在线源
+即可用于更新器。
+
+## 隐私与遥测
+
+**本软件不含任何遥测**：不收集使用统计、不上报崩溃与错误、不生成设备标识。
+
+安装器基于上游 [YuehaiTeam/kachina-installer](https://github.com/YuehaiTeam/kachina-installer)，
+上游自带错误上报与使用统计两条外发通道。本项目已把它们**连依赖一起物理移除**——
+不是运行时关开关，也不是把地址置空，而是编译产物里连上报地址字符串都不残留。
+
+仍然会发生的网络请求（都是功能本身）：
+
+- **更新检查**：启动时按配置访问 `api.github.com` 查询项目最新发行版；可在设置中关闭。
+  请求不包含设备标识，也不会下载安装包，只有确认更新后才交给安装目录中的更新程序。
+- **安装 / 更新**：从 GitHub Releases 下载安装包（地址见
+  `packaging/packaging.config.json` 的 `source`）。
+- **缺失的运行库**：`builds.dotnet.microsoft.com`（.NET Desktop Runtime 9）、
+  `aka.ms/vs/17/release/vc_redist.x64.exe`（VC++ 运行库）、
+  `go.microsoft.com/fwlink/p/`（WebView2 引导器）。
+- **除更新检查外，主程序运行期不联网**：帧率解锁与画面注入全部在本地完成；检测到缺运行库时只弹
+  提示，经确认后用系统浏览器打开微软官方下载页（`src/Host/RuntimePrerequisite.cs`）。
+- 本地日志与配置写在用户数据目录，不上传。
+
+## 用户协议与安全说明
+
+安装或使用本软件前，请阅读：
+
+- 仓库根目录 [`USER_AGREEMENT.txt`](USER_AGREEMENT.txt)（完整用户协议）
+- 程序内「用户协议与安全声明」（首次运行 / 设置中可再次打开）
+
+本工具属于第三方注入类软件，适用《米哈游用户协议》第十条第二款相关表述，**使用风险由您自行承担**。
+请关闭游戏 V-Sync 后使用自定义帧率。
+
+安装界面可点击查看协议全文，必须勾选「我已阅读并同意」才能安装；完整协议见仓库
+[`USER_AGREEMENT.txt`](USER_AGREEMENT.txt)，安装后释放到安装目录，并在首次运行时展示。
+
+### 安装 / 卸载会动到哪些东西
+
+- **安装写入**：安装目录、桌面与开始菜单的快捷方式、开机自启动项（`HKCU\...\Run` 或
+  最高权限计划任务）、「应用和功能」里的卸载信息，以及 .NET / VC++ / WebView2
+  运行环境（缺失时才装）。
+- **卸载删除**：上面这些，外加你在卸载时勾选的用户数据目录。系统目录、其他软件、
+  以及与其他软件共用的注册表容器（开机启动项、卸载信息等）**只删本软件自己的那一份**，
+  不会整棵删掉；碰到可疑路径一律跳过并写进日志，不会因为安全检查让卸载失败。
+- **下载的运行环境安装包**：落地在只有管理员可写的目录、文件名随机不可预测、运行前
+  验证微软签名 —— 签名无效或签名者不是微软就删掉文件并提示手动下载。
+- **安装器与提权进程之间的通道**：只允许本用户、SYSTEM 与管理员访问，其他本地程序
+  （包括沙箱进程）连不进来。
+
+## 参考、素材与版权
+
+### 思路参考的项目
+
+- 帧率解锁与画面效果注入（反角色虚化 / 移除水下马赛克 / 隐藏 UID）的特征码与
+  Hook / 隐藏思路参考
+  [DGP Studio 的 Snap.Hutao.Remastered.UnlockerIsland](https://github.com/SnapHutaoRemasteringProject/Snap.Hutao.Remastered.UnlockerIsland)（MIT），
+  已改编为特征码自适配扫描并整合进 `src/Stub/AntiBlur.cpp` 与 `src/Stub/HideUid.cpp`。
+- 安装 / 卸载 / 更新器整体方案来自 [YuehaiTeam/kachina-installer](https://github.com/YuehaiTeam/kachina-installer)
+  （源码快照在独立项目 [Kirara](https://github.com/bainian-gudu/Kirara)）。
+- 应用图标等图片素材取自 [babalae/better-genshin-impact](https://github.com/babalae/better-genshin-impact)
+  （GPL-3.0），逐文件路径见下文「图片与素材来源」。
+- 其余实现层面的参考（上游 issue、MSVC/Windows 行为变更等）一律记在对应目录的
+  `tools/devcheck/README.md` 里，代码注释只留一句指针。
+
+### 图片与素材来源
+
+| 文件 | 内容 | 来源（`md5sum` 逐字节核对） | 版权归属 |
+| --- | --- | --- | --- |
+| `src/Ui/public/images/game-icon.webp` | 《原神》官方应用图标（派蒙头像 + miHoYo 字标） | 米哈游官方素材 | © 米哈游 / HoYoverse |
+| `src/Host/Assets/app.webp`、`src/Ui/public/favicon.webp` | 应用图标（绮良良抱纸箱）的位图版本，源图同上 | [babalae/better-genshin-impact](https://github.com/babalae/better-genshin-impact) 的 `BetterGenshinImpact/Resources/Images/logo.png` / `Build/micasetup/Favicon.png`，由 `tools/to-webp.mjs` 转成 WebP | 素材随 BetterGI（**GPL-3.0**）；角色形象 © 米哈游 |
+| `src/Host/Assets/app.ico` | 应用图标（多尺寸 ICO）：窗体 / 托盘 / 快捷方式 / exe 资源；安装器与更新器 exe 图标（`packaging.config.json` 的 `iconFile`） | BetterGI 的 `logo.ico`；**Windows 图标 API 只认 ICO，不能换成 WebP** | 同上 |
+| `packaging/left.webp` | 安装器左栏图（399×454 竖图，`packaging.config.json` 的 `imageFile`） | 上游 kachina-installer 自带的左栏立绘（绮良良），与 Kirara 的 `web/left.webp` 逐字节相同（SHA256 `c4da8566…`）；写进配置是为了不随工具链内置资源变化 | 上游仓库素材（上游未提供 LICENSE）；角色形象 © 米哈游 |
+| `src/Ui/public/images/teyvat-landscape.webp` | 概览页 / 指南页的璃月风格山水横幅 | **gpt-6-astra-max 生成的原神风格插画**（个人自用前提下生成，非官方素材），转 WebP | 风格致敬《原神》；场景本身非米哈游素材 |
+| `src/Ui/public/images/starrail-icon.webp` | 《崩坏：星穹铁道》游戏图标（游戏库与顶栏切换器用） | 米哈游官方素材，转 WebP | © 米哈游 / HoYoverse |
+| `src/Ui/public/favicon.svg` | 星芒形单色 logo（纯几何路径，304 字节） | 本项目手写 SVG（矢量，不转位图） | 本项目（MIT） |
+
+> 注 0：仓库里的位图素材统一为 **WebP**（`src/Ui/public/images/*.webp`、
+> `src/Ui/public/favicon.webp`、`src/Host/Assets/app.webp`、`packaging/left.webp`）。
+> 只有两类例外：Windows 图标文件必须保持 **ICO**（`src/Host/Assets/app.ico`，
+> exe / 托盘 / 快捷方式 / 安装器图标由系统 API 读取），
+> 手写 logo 保持 **SVG**（矢量，缩放不失真）。转换脚本：`tools/to-webp.mjs`。
+> 构建脚本会递归清理 `dist` / 安装包暂存目录里的旧位图格式，避免增量构建残留
+> `.png` / `.jpg` / `.jpeg` / `.gif` / `.bmp` / `.tif` / `.tiff`；转换时如需一并删除
+> 旧格式源文件，可在 `to-webp.mjs` 末尾加 `--delete-input`。
+
+> 注 1：除 `favicon.svg`（本项目手写）与 gpt-6-astra-max 生成的横幅外，仓库内所有图片都与
+> 上游 kachina 快照或 BetterGI 仓库中的某个文件**逐字节相同**（核对方式：`md5sum`，
+> 路径见上表「来源」列）。BetterGI 以 **GPL-3.0** 发布，这些素材**不随本项目的
+> MIT 许可再授权**。
+> 注 2：凡涉及《原神》《崩坏：星穹铁道》角色、官方图标或美术风格的素材，若权利人提出
+> 异议，将从仓库中移除并替换；版权归属见下文「商标与作品归属」。
+
+### 商标与作品归属（米哈游）
+
+《原神》（Genshin Impact）、《崩坏：星穹铁道》（Honkai: Star Rail）等游戏名称，
+以及「派蒙」「绮良良」等角色名称、角色形象、游戏内场景与官方图标，版权均归
+**上海米哈游网络科技股份有限公司 / miHoYo / HoYoverse（COGNOSPHERE PTE. LTD.）**所有。
+本项目是独立第三方工具，与米哈游**无任何关联**，未获得其授权、赞助或背书；
+上述素材仅随本自用项目保存与展示，不用于任何商业目的。
+
+## License
+
+MIT · MinHook：BSD-2-Clause · 安装包构建工具 Kachina（[kachina-installer](https://github.com/YuehaiTeam/kachina-installer)，源码快照在独立项目 [Kirara](https://github.com/bainian-gudu/Kirara)）按其上游许可使用 —— **注意：上游仓库未提供 LICENSE 文件**，详见 Kirara 的 `UPSTREAM.md`。
+代码与文档主要由 AI 生成并按上述 MIT 许可发布；**图片素材不随 MIT 许可授权** ——
+它们分别属于米哈游、BetterGI（GPL-3.0）与上游 kachina 快照（见「图片与素材来源」）。

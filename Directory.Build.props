@@ -1,0 +1,15 @@
+<Project>
+  <!--
+    版本号的唯一事实来源：仓库根的 VERSION 文件（纯文本，一行 X.Y.Z）。
+    所有 .NET 工程（Host / Core / Contracts / tools）在这里统一拿到版本号，
+    不再各自写 <Version>；清单与 UI 侧也从这个文件派生。
+
+    改版本只需要动 VERSION 一处。
+  -->
+  <PropertyGroup>
+    <Version>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)VERSION').Trim())</Version>
+    <AssemblyVersion>$(Version).0</AssemblyVersion>
+    <FileVersion>$(Version).0</FileVersion>
+    <InformationalVersion>$(Version)</InformationalVersion>
+  </PropertyGroup>
+</Project>

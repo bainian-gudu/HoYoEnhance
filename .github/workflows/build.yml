@@ -1,0 +1,304 @@
+name: Build
+
+# 仅手动触发，不在 push / PR / release 时自动跑
+on:
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: "Build configuration"
+        required: true
+        default: "Release"
+        type: choice
+        options:
+          - Release
+          - Debug
+      host_mode:
+        description: "Host publish mode"
+        required: true
+        default: "framework-dependent"
+        type: choice
+        options:
+          - framework-dependent
+          - self-contained
+# 只需要 checkout 与上传 artifact，不需要写权限（与 devcheck.yml 一致）
+permissions:
+  contents: read
+
+# 同一分支的 Build 串行排队：两轮打包同时跑除了抢 runner，
+# 还会让两端分别下载 / 上传同名 artifact 互相覆盖。新触发只排队等前一轮跑完。
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_VERSION: "9.0.x"
+  NODE_VERSION: "22"
+  # 避免 runner 上 SDK 10 抢先解析 csproj（仍以 global.json rollForward 为准）
+  DOTNET_NOLOGO: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  # 压掉第三方 action 自己的告警，理由见
+  # tools/devcheck/README.md「日志里哪些 Warning / error 是正常的」
+  NODE_NO_WARNINGS: "1"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 安装器工具链在独立项目 Kirara：直接下载最新 Release 里构建好的
+  # kirara-builder.exe。本仓库 CI 不再检出 Kirara 源码、不再现场编译 Rust。
+  # ---------------------------------------------------------------------------
+  build-builder:
+    name: Installer builder (Kirara latest release)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      # gh CLI 在 GitHub runner 上预装；默认取 Latest Release，不固定 tag，
+      # 始终使用 Kirara 已发布、已通过其自身 CI 的安装器构建工具。
+      - name: Download kirara-builder from latest release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path "kirara/tools" | Out-Null
+          gh release download `
+            --repo bainian-gudu/Kirara `
+            --pattern "kirara-builder.exe" `
+            --dir "kirara/tools" `
+            --clobber
+          if (-not (Test-Path "kirara\tools\kirara-builder.exe")) {
+            throw "kirara-builder.exe 未下载"
+          }
+          Get-Item kirara\tools\kirara-builder.exe |
+            Select-Object FullName, @{n = "MB"; e = { [math]::Round($_.Length / 1MB, 2) }} |
+            Format-List
+
+      - name: Upload kirara-builder
+        uses: actions/upload-artifact@v6
+        with:
+          name: kirara-builder
+          path: kirara/tools/kirara-builder.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # 应用本体：Web UI + FpsUnlockerStub.dll / StarRailStub.dll + Host
+  # ---------------------------------------------------------------------------
+  build-app:
+    name: App (UI + stub + host)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: src/Ui/package-lock.json
+
+      - name: Build stub + host
+        shell: pwsh
+        env:
+          CONFIGURATION: ${{ inputs.configuration }}
+          HOST_MODE: ${{ inputs.host_mode }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          # 勿用 $args（PowerShell 自动变量）；改用 hashtable splat
+          $buildParams = @{
+            Configuration = $env:CONFIGURATION
+            SkipSetup     = $true
+          }
+          if ($env:HOST_MODE -eq "self-contained") {
+            $buildParams.SelfContained = $true
+          }
+          Write-Host "build.ps1 params: $($buildParams | ConvertTo-Json -Compress)"
+          & .\build.ps1 @buildParams
+          if (-not (Test-Path "dist\HoYoEnhance.exe")) { throw "Host exe missing" }
+          if (-not (Test-Path "dist\FpsUnlockerStub.dll")) { throw "Stub dll missing" }
+          if (-not (Test-Path "dist\StarRailStub.dll")) { throw "StarRail stub dll missing" }
+          if (-not (Test-Path "dist\ui\index.html")) { throw "Web UI missing under dist\ui\" }
+          $hasCore = (Test-Path "dist\coreclr.dll") -or (Test-Path "dist\hostfxr.dll")
+          if ($env:HOST_MODE -eq "self-contained") {
+            if (-not $hasCore) { Write-Warning "SC host missing coreclr/hostfxr" }
+          } else {
+            if ($hasCore) { Write-Warning "FDD host unexpectedly contains coreclr/hostfxr" }
+            else { Write-Host "FDD host OK (no bundled runtime)" }
+          }
+          Get-ChildItem dist | Select-Object Name, Length | Format-Table -AutoSize
+
+      # 登录计划任务的 XML 格式对不对，只有任务计划程序自己说了算；devcheck 那几层管不到。
+      # 这里让刚构建出来的宿主导出真实 XML，再让 schtasks 真跑一次 /Create（随后删掉），
+      # 保证「管理员自启动」不会因为 XML 被拒而静默退回普通权限自启。
+      - name: Validate autostart task XML
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $xml = Join-Path $env:RUNNER_TEMP "HoYoEnhance.AutoStart.xml"
+          if (Test-Path -LiteralPath $xml) { Remove-Item -LiteralPath $xml -Force }
+          $proc = Start-Process -FilePath ".\dist\HoYoEnhance.exe" `
+            -ArgumentList "--dump-elevated-task-xml", "`"$xml`"" -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "导出登录计划任务 XML 失败（退出码 $($proc.ExitCode)）" }
+          if (-not (Test-Path -LiteralPath $xml)) { throw "未生成登录计划任务 XML" }
+          Write-Host "任务 XML：$((Get-Item -LiteralPath $xml).Length) bytes"
+
+          $task = "HoYoEnhance.CiXmlValidate"
+          schtasks /Create /TN $task /XML $xml /F
+          if ($LASTEXITCODE -ne 0) { throw "schtasks 拒绝了登录计划任务 XML（退出码 $LASTEXITCODE）" }
+          schtasks /Query /TN $task /XML | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "校验任务创建后查询失败" }
+          schtasks /Delete /TN $task /F
+          if ($LASTEXITCODE -ne 0) { throw "清理校验任务失败" }
+          Write-Host "登录计划任务 XML 校验通过"
+
+      - name: Upload dist
+        uses: actions/upload-artifact@v6
+        with:
+          name: app-dist
+          path: dist/**
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # 打包：用 Kirara 最新 Release 的 kirara-builder 跑 packaging/pack.ps1
+  # ---------------------------------------------------------------------------
+  pack:
+    name: Pack installer
+    runs-on: windows-latest
+    needs: [build-builder, build-app]
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Download kirara-builder
+        uses: actions/download-artifact@v7
+        with:
+          name: kirara-builder
+          path: packaging/tools
+
+      - name: Download app dist
+        uses: actions/download-artifact@v7
+        with:
+          name: app-dist
+          path: dist
+
+      - name: Read version
+        id: ver
+        shell: pwsh
+        run: |
+          $version = (Get-Content "VERSION" -Raw).Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "VERSION 必须是 X.Y.Z 形式的纯版本号，当前为 '$version'"
+          }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Pack
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not (Test-Path "packaging\tools\kirara-builder.exe")) { throw "kirara-builder.exe missing" }
+          if (-not (Test-Path "dist\HoYoEnhance.exe")) { throw "dist payload missing" }
+          & .\packaging\pack.ps1 `
+            -BuilderPath "packaging\tools\kirara-builder.exe" `
+            -Version "${{ steps.ver.outputs.version }}"
+          Get-ChildItem artifacts | Format-Table Name, Length
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: HoYoEnhance-win-x64
+          path: |
+            artifacts/*.zip
+            artifacts/*.7z
+            artifacts/*.Install.*.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      # 给 package-e2e 的离线更新用例准备一个版本号更高的同应用安装包。
+      # 只加一个测试标记文件，不改发布目录里的正式产物。
+      - name: Pack update fixture
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $baseVersion = "${{ steps.ver.outputs.version }}"
+          $parts = $baseVersion.Split('.')
+          $last = 0
+          if ($parts.Count -lt 2 -or -not [int]::TryParse($parts[-1], [ref]$last)) {
+            throw "无法从版本号 $baseVersion 生成 CI 更新版本"
+          }
+          $parts[-1] = "$($last + 1)"
+          $updateVersion = $parts -join '.'
+          $fixtureDist = "dist-ci-update"
+          if (Test-Path -LiteralPath $fixtureDist) {
+            Remove-Item -LiteralPath $fixtureDist -Recurse -Force
+          }
+          Copy-Item -LiteralPath "dist" -Destination $fixtureDist -Recurse -Force
+          Set-Content -LiteralPath (Join-Path $fixtureDist "ci-update-marker.txt") `
+            -Value "v2" -Encoding utf8
+          & .\packaging\pack.ps1 `
+            -DistDir $fixtureDist `
+            -OutDir "artifacts/ci-update" `
+            -BuilderPath "packaging\tools\kirara-builder.exe" `
+            -Version $updateVersion
+          Get-ChildItem -LiteralPath "artifacts/ci-update" |
+            Format-Table Name, Length
+
+      - name: Upload update fixture
+        uses: actions/upload-artifact@v6
+        with:
+          name: package-e2e-update
+          path: artifacts/ci-update/*.Install.*.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  # HoYoEnhance 自己的安装包级行为测试：拿刚打出来的真实安装包，在 Windows
+  # runner 上真装、真升、真卸。Kirara 的 builder 内部矩阵仍在 Kirara 仓库跑。
+  package-e2e:
+    name: Package E2E (${{ matrix.test }})
+    needs: [pack]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        test:
+          - offline-install
+          - uninstall
+          - already-latest
+          - offline-update
+          - portable-smoke
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Download current package artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: HoYoEnhance-win-x64
+          path: artifacts/current
+
+      - name: Download update fixture
+        uses: actions/download-artifact@v7
+        with:
+          name: package-e2e-update
+          path: artifacts/update
+
+      - name: Run ${{ matrix.test }}
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          pwsh -NoProfile -File tools/ci/package-e2e.ps1 `
+            -Test "${{ matrix.test }}" `
+            -CurrentArtifacts "artifacts/current" `
+            -UpdateArtifacts "artifacts/update"

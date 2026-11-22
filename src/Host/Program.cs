@@ -1,0 +1,406 @@
+namespace GenshinFpsUnlocker.Host;
+
+/// <summary>
+/// 进程入口：单实例、运行时检测、启动监视服务与主窗体。
+/// 清单为 asInvoker：非管理员日常启动不弹 UAC，必须能显示主窗 + 托盘。
+///
+/// 安装 / 卸载只有一种实现：Kachina 安装器（packaging/ 打包出的安装包，
+/// 安装目录内自带卸载程序与更新程序）。
+/// 宿主自身不再提供 --install / --uninstall、Uninstall.cmd 垫片、自写 ARP 卸载项、
+/// 内置白名单删目录等任何「第二种安装卸载方式」；本进程也不会为安装目的主动提权。
+/// </summary>
+internal static class Program
+{
+    /// <summary>当前持有的单实例互斥；提权重启前需释放。</summary>
+    private static SingleInstance? _activeInstance;
+
+    /// <summary>释放单实例锁，供「以管理员重新启动」在拉起新进程前调用。</summary>
+    internal static void ReleaseSingleInstance()
+    {
+        var inst = Interlocked.Exchange(ref _activeInstance, null);
+        if (inst is null) return;
+        try { inst.Dispose(); }
+        catch (Exception ex) { AppLog.Warn("ReleaseSingleInstance dispose: " + ex.Message); }
+    }
+
+    /// <summary>
+    /// 把单实例锁重新拿回来。提权重启失败（用户在 UAC 点「否」）时必须调用：
+    /// 锁已经释放但本进程还在跑，此时用户再点一次快捷方式就会双开，
+    /// 两个 Host 同时写共享内存、同时对同一个游戏进程注入。
+    /// </summary>
+    internal static bool ReacquireSingleInstance()
+    {
+        if (_activeInstance is not null) return true;
+
+        var inst = new SingleInstance();
+        if (!inst.TryAcquire())
+        {
+            inst.Dispose();
+            AppLog.Warn("ReacquireSingleInstance: 已被其它实例占用");
+            return false;
+        }
+
+        _activeInstance = inst;
+        AppLog.Info("single-instance reacquired: " + (inst.Name ?? "(none)"));
+        return true;
+    }
+
+    /// <summary>
+    /// 用户主动：释放单实例后以管理员重新启动主程序（显示主窗）。
+    /// 成功拉起后应退出当前进程。不用于开机自启。
+    /// </summary>
+    internal static bool TryRestartElevatedForUnlock(out string error)
+    {
+        error = string.Empty;
+        if (Elevation.IsAdministrator())
+        {
+            error = "当前已是管理员权限。";
+            return false;
+        }
+
+        // 先释放互斥，避免提权实例被「已在运行」挡住
+        try { ReleaseSingleInstance(); }
+        catch (Exception ex) { AppLog.Warn("ReleaseSingleInstance: " + ex.Message); }
+
+        // --elevated-restart：提权后显示主窗但不改动「启动后最小化」配置；
+        // --elevated-handoff 让新实例在旧实例
+        // 释放互斥的交接窗口内短暂重试，避免启动竞态导致管理员实例立即退出。
+        if (!Elevation.TryRelaunchElevated("--elevated-restart --elevated-handoff", out error))
+        {
+            // 提权没成（多半是用户在 UAC 点了「否」）：把刚释放的锁拿回来，
+            // 否则本进程还在跑却不再持有单实例锁 → 再点快捷方式就双开。
+            if (!ReacquireSingleInstance())
+            {
+                error = "提权已取消，且无法恢复单实例状态（可能已有另一个实例在运行）。" + error;
+            }
+            return false;
+        }
+
+        AppLog.Info("已请求以管理员身份重新启动");
+        return true;
+    }
+
+    [STAThread]
+    private static void Main(string[] args)
+    {
+        // 顶层兜底：任何未捕获异常都弹窗，禁止「双击无反应」
+        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+        Application.ThreadException += (_, e) =>
+        {
+            try { AppLog.Error(e.Exception, "UI ThreadException"); } catch { /* ignore */ }
+            try
+            {
+                MessageBox.Show(
+                    "界面线程异常：\n" + e.Exception.Message +
+                    "\n\n日志：用户数据目录\\logs\\",
+                    AppPaths.ProductDisplayName,
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+            catch { /* ignore */ }
+        };
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+        {
+            var ex = e.ExceptionObject as Exception;
+            try { if (ex is not null) AppLog.Error(ex, "UnhandledException"); } catch { /* ignore */ }
+            try
+            {
+                MessageBox.Show(
+                    "启动失败：\n" + (ex?.Message ?? e.ExceptionObject?.ToString() ?? "unknown") +
+                    "\n\n若以标准用户运行，请确认已安装 .NET Desktop Runtime 9 与 WebView2。\n" +
+                    "日志：用户数据目录\\logs\\",
+                    AppPaths.ProductTitle,
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+            catch { /* ignore */ }
+        };
+
+        try
+        {
+            // CI / 诊断专用：只把登录计划任务 XML 写出来就退出，本机不会创建任何任务。
+            // build.yml 拿这份 XML 真跑一次 schtasks /Create，确保任务计划程序接受它。
+            var dumpIndex = Array.IndexOf(args, "--dump-elevated-task-xml");
+            if (dumpIndex >= 0 && dumpIndex + 1 < args.Length)
+            {
+                Autostart.DumpElevatedTaskXml(args[dumpIndex + 1]);
+                return;
+            }
+
+            Run(args);
+        }
+        catch (Exception ex)
+        {
+            try { AppLog.Error(ex, "Main"); } catch { /* ignore */ }
+            try
+            {
+                MessageBox.Show(
+                    "无法启动：\n" + ex.Message +
+                    "\n\n" + ex.GetType().FullName +
+                    "\n\n日志目录：\n用户数据目录\\logs\\",
+                    AppPaths.ProductTitle,
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+            catch { /* ignore */ }
+        }
+    }
+
+    private static void Run(string[] args)
+    {
+        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+        UiStyle.ApplyApplicationTheme();
+        ApplicationConfiguration.Initialize();
+
+        var quiet = args.Any(a => a is "--quiet" or "/S" or "/s");
+        var isAutostart = args.Any(a => a is "--autostart");
+        var elevatedRestart = args.Any(a => a is "--elevated-restart");
+
+        AppConfig? earlyConfig = null;
+        try
+        {
+            AppLog.Initialize(new AppConfig());
+            earlyConfig = AppConfig.Load();
+            AppLog.ApplyConfig(earlyConfig);
+        }
+        catch
+        {
+            try
+            {
+                earlyConfig ??= new AppConfig();
+                AppLog.Initialize(earlyConfig);
+            }
+            catch { /* 日志失败不得阻断启动 */ }
+        }
+
+        AppLog.Info(
+            $"args=[{string.Join(' ', args)}] admin={Elevation.IsAdministrator()} " +
+            $"autostart={isAutostart} user={Environment.UserName} " +
+            $"integrity={(Elevation.IsAdministrator() ? "high" : "medium")}");
+        // 开机自启（静默）：任何提前退出都必须留下可检索的日志
+        if (isAutostart)
+            AppLog.Info("autostart launch active (silent): 后续任何退出都会记录原因");
+
+        if (!OsCompatibility.EnsureOrPrompt(quiet || isAutostart))
+        {
+            AppLog.Error("OS 兼容性检查未通过 — 退出" + (isAutostart ? "（autostart launch）" : ""));
+            // 早退路径也要落盘原因行并写 session end，否则 autostart 静默启动
+            // 的失败会表现为「进程无声消失」
+            AppLog.Shutdown();
+            return;
+        }
+
+        // ---- 安装/卸载命令行 ----
+        // 安装与卸载统一由 Kachina 完成（安装目录内的卸载程序，
+        // 或「设置 → 应用和功能」里由 Kachina 注册的卸载项）。带这些参数启动时只提示
+        // 用户改用 Kachina，程序自己不碰文件系统。
+        if (args.Any(a => a is "--install" or "/install" or "--uninstall" or "/uninstall"))
+        {
+            AppLog.Warn("安装/卸载由 Kachina 负责，忽略参数: " + string.Join(' ', args));
+            if (!quiet)
+            {
+                MessageBox.Show(
+                    "本程序已不再自带安装 / 卸载功能。\n\n" +
+                    "• 卸载：运行安装目录下的卸载程序，\n" +
+                    "  或在「设置 → 应用 → 安装的应用」里卸载「" + AppPaths.ProductDisplayName + "」。\n" +
+                    "• 安装 / 更新：使用最新 HoYoEnhance 安装包，\n" +
+                    "  或安装目录下的更新程序。",
+                    AppPaths.ProductDisplayName,
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
+            AppLog.Shutdown();
+            return;
+        }
+
+        // ---- 单实例：Global 失败自动 Local（非管理员关键路径）----
+        using var instance = new SingleInstance();
+        var elevatedHandoff = args.Any(a => a is "--elevated-handoff");
+        var acquired = instance.TryAcquire();
+        if (!acquired && elevatedHandoff)
+        {
+            // 提权重启时旧实例可能仍在关闭窗体/释放句柄。只对显式交接参数
+            // 重试，普通二次启动仍保持立即唤醒已有实例的行为。
+            for (var attempt = 1; attempt <= 20 && !acquired; attempt++)
+            {
+                Thread.Sleep(250);
+                acquired = instance.TryAcquire();
+                if (!acquired)
+                    AppLog.Debug($"elevated handoff 等待旧实例退出 ({attempt}/20)");
+            }
+        }
+        if (!acquired)
+        {
+            // 只有用户手动二次启动才唤醒主窗。登录自启 / 提权交接的重复实例必须
+            // 静默退出：否则计划任务与 HKCU\Run 同时拉起两个实例时，后到的那个会把
+            // 「启动进托盘」的主窗弹出来。
+            var wakeExisting = !isAutostart && !elevatedHandoff;
+            AppLog.Warn(wakeExisting
+                ? "已有实例在运行 — 尝试唤醒主实例后退出"
+                : "已有实例在运行 — 静默退出（不唤醒主窗）"
+                  + (isAutostart ? "（autostart launch 放弃二次启动，主实例仍在工作）" : ""));
+            var signaled = false;
+            if (wakeExisting)
+            {
+                try { signaled = InstanceWake.TrySignal(); } catch { /* ignore */ }
+            }
+            if (!signaled && !quiet && !isAutostart && !elevatedHandoff)
+            {
+                MessageBox.Show(
+                    "程序已在运行。\n\n" +
+                    "请查看系统托盘（任务栏 ^「显示隐藏的图标」）。\n" +
+                    "若仍找不到，请在任务管理器结束本程序进程后重试。",
+                    AppPaths.ProductDisplayName,
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
+            AppLog.Shutdown();
+            return;
+        }
+        _activeInstance = instance;
+        AppLog.Info("single-instance acquired: " + (instance.Name ?? "(none)"));
+
+        // ---- 运行时依赖 ----
+        if (!RuntimePrerequisite.EnsureOrPrompt(quiet || isAutostart))
+        {
+            AppLog.Error("运行时前置条件不满足 — 退出" +
+                         (isAutostart ? "（autostart launch：.NET Desktop Runtime / WebView2 缺失或损坏）" : ""));
+            AppLog.Shutdown();
+            return;
+        }
+
+        if (!Elevation.IsAdministrator())
+            AppLog.Info("以标准用户完整性运行（asInvoker，无 UAC）— 应正常显示主窗与托盘");
+        else
+            AppLog.Info("当前进程已提权");
+
+        try { BackgroundResilience.Apply(); }
+        catch (Exception ex) { AppLog.Warn("BackgroundResilience: " + ex.Message); }
+
+        var config = earlyConfig ?? AppConfig.Load();
+        AppLog.ApplyConfig(config);
+        for (var i = 0; i < args.Length; i++)
+        {
+            if ((args[i] is "--fps" or "-f") && i + 1 < args.Length && int.TryParse(args[i + 1], out var fps))
+                // 命令行帧率作用于界面上当前选中的游戏（默认原神）。
+                config.ActiveProfile.TargetFps = fps;
+            // 仅 --minimized / -m 强制启动进托盘；--autostart 跟随配置（默认显示窗，可勾选最小化）
+            if (args[i] is "--minimized" or "-m")
+                config.StartMinimized = true;
+            if (args[i] is "--show" or "--no-minimize")
+                config.StartMinimized = false;
+            if (args[i] is "--master-off")
+                config.MasterEnabled = false;
+            if (args[i] is "--master-on")
+                config.MasterEnabled = true;
+            if (args[i] is "--no-log")
+                config.DebugLogging = false;
+            if (args[i] is "--log-level" && i + 1 < args.Length)
+                config.LogLevel = args[i + 1];
+        }
+
+        // 开机自启：若用户未勾选「启动后最小化」，仍显示主窗（避免「开机后找不到」）
+        // 若勾选了，则进托盘。
+        if (isAutostart && !args.Any(a => a is "--minimized" or "-m" or "--show" or "--no-minimize"))
+        {
+            // 保持 config.StartMinimized 原值
+            AppLog.Info("autostart: StartMinimized=" + config.StartMinimized);
+        }
+
+        config.Sanitize();
+        AppLog.ApplyConfig(config);
+
+        // 用户明确开启自动提权时，手动启动交接到管理员实例；登录自启不在这里提权，
+        // 而是由「开机自启动 + 自动管理员」组合登记的最高权限计划任务在登录时直接启动
+        // （见 Autostart.SyncLoginStartup），因此登录过程不会弹 UAC。
+        // 只允许受保护的 Program Files 安装目录执行此路径，避免用户可写目录
+        // 中的 exe 被替换后借 UAC 获取高完整性令牌。
+        if (!isAutostart && config.AutoStartAsAdministrator && !Elevation.IsAdministrator()
+            && !args.Any(a => a is "--elevated-auto" or "--elevated-restart"))
+        {
+            var trustError = string.Empty;
+            var trustedExe = AppPaths.IsInstalledUnderProgramFiles()
+                && ModuleTrust.IsTrustworthy(
+                    AppPaths.ExePath,
+                    AppPaths.ExecutableFileName,
+                    "自动提权程序",
+                    out trustError,
+                    elevatedHint: "请重新安装到 Program Files 下后再启用自动提权。");
+            if (!trustedExe)
+            {
+                AppLog.Warn("自动提权已跳过：" + (trustError ?? "程序目录未受保护"));
+            }
+            else
+            {
+                ReleaseSingleInstance();
+                if (Elevation.TryRelaunchElevated("--elevated-auto --elevated-handoff", out var elevationError))
+                {
+                    AppLog.Info("已交接至自动管理员启动实例");
+                    // 交接成功即退出：刷盘并写 session end，避免缓冲刷盘定时器
+                    // 还没来得及跑进程就没了（日志里表现为交接原因行丢失）
+                    AppLog.Shutdown();
+                    return;
+                }
+
+                AppLog.Warn("自动管理员启动失败，继续以标准权限运行: " + elevationError);
+                _ = ReacquireSingleInstance();
+            }
+        }
+
+        // 登录自启：普通权限写 HKCU\Run，管理员权限登记最高权限计划任务，二者只保留一个；
+        // 登记失败会退回 HKCU\Run 并把原因带到界面上（Autostart.LastReport）。
+        // 同一进程里这里先同步、UiBridge 后建，所以首次读到的就是本次登录的真实状态。
+        try
+        {
+            Autostart.SyncLoginStartup(
+                config.AutoStartWithWindows,
+                config.AutoStartAsAdministrator,
+                config.LoadedFromDisk);
+        }
+        catch (Exception ex) { AppLog.Warn("Autostart: " + ex.Message); }
+
+        // 只对 Kachina 安装副本维护快捷方式：桌面图标由安装器按勾选一次性创建；
+        // 开始菜单项每次启动重建，保证指向当前 exe。
+        var isInstalledCopy =
+            PathUtil.ExistsFile(AppPaths.UninstExePath)
+            || AppPaths.IsInstalledUnderProgramFiles();
+
+        if (isInstalledCopy)
+        {
+            try
+            {
+                ShortcutHelper.CleanupDuplicateShortcuts();
+                ShortcutHelper.CreateStartMenuShortcuts(AppPaths.ExePath, AppPaths.ExeDirectory);
+            }
+            catch (Exception ex) { AppLog.Warn("刷新快捷方式: " + ex.Message); }
+        }
+
+        if (!config.TrySave(out var cfgErr)) AppLog.Warn("startup config save: " + cfgErr);
+        var genshin = config.Profile(GameId.Genshin);
+        var starRail = config.Profile(GameId.StarRail);
+        AppLog.Info(
+            $"config ok activeGame={GameCatalog.Get(config.ActiveGame).Key} master={config.MasterEnabled} " +
+            $"genshin[fps={genshin.TargetFps} enabled={genshin.Enabled}] " +
+            $"starRail[fps={starRail.TargetFps} enabled={starRail.Enabled}] " +
+            $"startMin={config.StartMinimized} data={AppPaths.DataDirectory}");
+
+        if (!config.SafetyNoticeAcknowledged && !quiet && !isAutostart)
+            AppLog.Info("首次运行：将由界面展示安全声明");
+
+        UnlockService? service = null;
+        try
+        {
+            service = new UnlockService(config);
+            service.Start();
+            AppLog.Info("UnlockService 已启动 — 进入 UI 消息循环");
+            Application.Run(new MainForm(config, service, elevatedRestart ? false : null));
+        }
+        finally
+        {
+            try { service?.Dispose(); } catch { /* ignore */ }
+            try { BackgroundResilience.Clear(); } catch { /* ignore */ }
+            try { ReleaseSingleInstance(); } catch { /* ignore */ }
+            AppLog.Shutdown();
+        }
+    }
+}

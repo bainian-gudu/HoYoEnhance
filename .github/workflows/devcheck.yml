@@ -1,0 +1,95 @@
+name: Devcheck
+
+# 自动执行：push 到 main、任何 PR、以及手动触发。
+# 这是「快速体检」工作流（tools/devcheck），几分钟内出结果；
+# 完整的打包工作流 build.yml 仍然只手动触发（Windows + nightly + build-std，很慢）。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: devcheck-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_VERSION: "9.0.x"
+  NODE_VERSION: "22"
+  DOTNET_NOLOGO: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  CARGO_TERM_COLOR: "always"
+  # 压掉第三方 action 自己的弃用告警，理由见 tools/devcheck/README.md「日志里哪些 Warning / error 是正常的」
+  NODE_NO_WARNINGS: "1"
+
+jobs:
+  devcheck:
+    name: devcheck (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        # ubuntu 验证脚本的跨平台分支；windows 验证用户实际会跑的那条路径
+        # （Get-Tool 的 .cmd 解析、路径分隔符、dotnet 原生构建）
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      # 压掉 actions/checkout 里 git init 的 8 行 master hint，详见 tools/devcheck/README.md
+      - name: Silence git default-branch hint
+        if: runner.os == 'Linux'
+        run: git config --global init.defaultBranch main
+
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: src/Ui/package-lock.json
+
+      # vendor 层断言：安装器工具链只在独立项目 Kirara，本仓库不再内嵌 kachina
+      # 源码，只从 Kirara 最新 Release 下载 kirara-builder.exe
+      # （详见 tools/devcheck/README.md）。
+      # 单独跑一次，让这条约束在日志里有独立、显眼的结论。
+      # 注意：本文件的注释里不要写上游仓库名，vendor 层会扫工作流文件。
+      - name: Installer toolchain guard
+        shell: pwsh
+        run: pwsh -NoProfile -File ./tools/devcheck/devcheck.ps1 -Layer vendor
+
+      # Host 行为断言只在 Windows 上真跑（ubuntu 上该层只验证测试台能编译）。
+      # 单独跑一次，让「断言到底跑没跑」在日志里有独立、显眼的结论。
+      - name: Host behaviour tests
+        shell: pwsh
+        run: pwsh -NoProfile -File ./tools/devcheck/devcheck.ps1 -Layer hosttest
+
+      - name: devcheck (all layers)
+        shell: pwsh
+        run: pwsh -NoProfile -File ./tools/devcheck/devcheck.ps1
+
+      # 自检：注入错误，确认每一层真的会报错（防止「检查跑通了但其实什么都没查」）。
+      # 自检会临时改写仓库文件，因此自带仓库改动锁：同一工作区里若还有别的 devcheck
+      # 在跑，它会直接报「另一个 devcheck 正持有仓库改动锁」而不是互相污染出假失败。
+      - name: devcheck -SelfTest
+        shell: pwsh
+        run: pwsh -NoProfile -File ./tools/devcheck/devcheck.ps1 -SelfTest
+
+      # Web UI 构建不在 all 里（要先 npm ci），这里单独跑；只在 ubuntu 上跑，省时间
+      - name: Web UI lint, tests, build
+        if: runner.os == 'Linux'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Push-Location src/Ui
+          try { npm ci --no-audit --no-fund } finally { Pop-Location }
+          pwsh -NoProfile -File ./tools/devcheck/devcheck.ps1 -Layer ui

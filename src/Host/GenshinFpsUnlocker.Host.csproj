@@ -1,0 +1,74 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!-- 必须带 Windows 版本号，否则 TargetPlatformVersion 默认为 7.0，与 SupportedOSPlatformVersion 冲突 (NETSDK1135) -->
+    <!-- Toast 兼容库需要 18362 SDK；TargetPlatformMinVersion 仍保留 17763，
+         运行时在旧系统自动回退托盘提示。 -->
+    <TargetFramework>net9.0-windows10.0.18362.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <!-- FDD：不打包 .NET 运行时（减小包体）；应用程序集仍随 publish 输出。 -->
+    <SelfContained>false</SelfContained>
+    <PublishSelfContained>false</PublishSelfContained>
+    <PublishReadyToRun>false</PublishReadyToRun>
+    <PublishSingleFile>false</PublishSingleFile>
+    <PublishTrimmed>false</PublishTrimmed>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>HoYoEnhance</AssemblyName>
+    <RootNamespace>GenshinFpsUnlocker.Host</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- 版本号不在这里写：唯一来源是仓库根 VERSION，由 Directory.Build.props 注入。 -->
+    <Authors>HoYoEnhance</Authors>
+    <Description>HoYoEnhance — 原神 / 崩坏：星穹铁道帧率解锁与画面增强</Description>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- BetterGenshinImpact logo.ico → 窗体/任务栏/快捷方式/托盘 -->
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+    <Product>HoYoEnhance</Product>
+    <AssemblyTitle>HoYoEnhance</AssemblyTitle>
+    <!-- WFO5001: SystemColorMode 实验 API（跟随系统主题所需） -->
+    <!-- WFO0003: app.manifest 已声明 PerMonitorV2，与 SetHighDpiMode 并存可接受 -->
+    <NoWarn>$(NoWarn);WFO5001;WFO0003</NoWarn>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Core\HoYoEnhance.Core.csproj" />
+    <ProjectReference Include="..\Contracts\HoYoEnhance.Contracts.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Win32.SystemEvents" Version="9.0.0" />
+    <!-- WinForms 宿主只用 Core；排除 Wpf 以免 MSB3277 (WindowsBase 4 vs 5) -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
+    <!-- Windows 10/11 现代 Toast；不可用时宿主回退到托盘提示。 -->
+    <PackageReference Include="CommunityToolkit.WinUI.Notifications" Version="7.1.2" />
+  </ItemGroup>
+  <!-- 让 tools/devcheck/hosttest 的自包含测试台能直接用 internal 类型（ProcessRunner 等）。
+       只在 Debug 下开，Release 产物不带这条 friend assembly。 -->
+  <ItemGroup Condition="'$(Configuration)' == 'Debug'">
+    <InternalsVisibleTo Include="GenshinFpsUnlocker.Host.Tests" />
+  </ItemGroup>
+  <!-- 应用图标旁路副本（exe 旁 app.ico），托盘/运行时读文件 -->
+  <ItemGroup>
+    <None Include="Assets\app.ico">
+      <Link>app.ico</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+    <None Include="Assets\app.webp" Condition="Exists('Assets\app.webp')">
+      <Link>app.webp</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+  </ItemGroup>
+  <!-- Web UI 构建产物（Vite singlefile）随宿主发布 -->
+  <ItemGroup>
+    <Content Include="..\Ui\dist\**\*" Condition="Exists('..\Ui\dist\index.html')">
+      <Link>ui\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+</Project>

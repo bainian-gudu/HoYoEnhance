@@ -1,0 +1,57 @@
+{
+  "source": [
+    {
+      "id": "github",
+      "name": "GitHub",
+      "uri": "https://github.com/bainian-gudu/HoYoEnhance/releases/download/v${version}/HoYoEnhance.Install.${version}.exe#versionRegex=/tag/v?([0-9.]%2B)"
+    }
+  ],
+  "appName": "HoYoEnhance",
+  "shortcutName": "HoYoEnhance",
+  "publisher": "HoYoEnhance",
+  "regName": "HoYoEnhance",
+  "exeName": "HoYoEnhance.exe",
+  "uninstallName": "HoYoEnhance.uninst.exe",
+  "updaterName": "HoYoEnhance.update.exe",
+  "programFilesPath": "HoYoEnhance",
+  "title": "HoYoEnhance",
+  "description": "原神 / 崩坏：星穹铁道 · 自定义 FPS · 后台注入 · 托盘设置",
+  "windowTitle": "HoYoEnhance 安装程序",
+  "ignoreFolderPath": [],
+  "userDataPath": [
+    "%LOCALAPPDATA%/HoYoEnhance",
+    "%APPDATA%/HoYoEnhance",
+    "%USERPROFILE%/Documents/HoYoEnhance"
+  ],
+  "extraUninstallPath": [
+    "${INSTALL_PATH}/HoYoEnhance.exe",
+    "${INSTALL_PATH}/HoYoEnhance.uninst.exe",
+    "${INSTALL_PATH}/HoYoEnhance.update.exe",
+    "%APPDATA%/Microsoft/Windows/Start Menu/Programs/HoYoEnhance",
+    "%ProgramData%/Microsoft/Windows/Start Menu/Programs/HoYoEnhance"
+  ],
+  "extraUninstallRegistry": [
+    {
+      "hive": "HKCU",
+      "key": "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+      "value": "HoYoEnhance"
+    }
+  ],
+  "extraUninstallScheduledTasks": [
+    "HoYoEnhance.AutoStart"
+  ],
+  "extraUninstallLnkNames": [
+    "HoYoEnhance.lnk",
+    "Uninstall HoYoEnhance.lnk"
+  ],
+  "uacStrategy": "prefer-admin",
+  "imageFile": "left.webp",
+  "iconFile": "../src/Host/Assets/app.ico",
+  "agreementFile": "../USER_AGREEMENT.txt",
+  "agreementFormat": "text",
+  "agreementTitle": "用户协议",
+  "runtimes": [
+    "Microsoft.DotNet.DesktopRuntime.9",
+    "Microsoft.VCRedist.2015+.x64"
+  ]
+}

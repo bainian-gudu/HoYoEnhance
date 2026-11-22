@@ -1,0 +1,586 @@
+using System.Diagnostics;
+
+namespace GenshinFpsUnlocker.Host;
+
+/// <summary>
+/// 核心后台服务：按游戏分别监视进程、注入各自的 Stub、经共享内存下发目标 FPS；
+/// 崩坏：星穹铁道的帧率不走注入，而是直接改注册表里的画面设置。
+/// UI / 托盘通过属性与 StateChanged 事件读取状态；本类负责节流以降低开销。
+/// </summary>
+internal sealed partial class UnlockService : IDisposable
+{
+    /// <summary>
+    /// 单款游戏的运行期状态：注入尝试 / 退避 / 路径与注册表核对结果。
+    /// 两款游戏各持一份，互不覆盖。
+    /// </summary>
+    private sealed class GameSession
+    {
+        /// <summary>已尝试注入的 PID（含 Stub 未就绪），避免对同一进程重复注入。</summary>
+        public int InjectAttemptedPid;
+        /// <summary>连续注入失败次数，用于指数退避。</summary>
+        public int InjectFailStreak;
+        /// <summary>下一次允许尝试注入的 UTC 时间。</summary>
+        public DateTime NextInjectAttemptUtc = DateTime.MinValue;
+        /// <summary>该游戏的路径状态文案（UI 按当前游戏显示）：监视线程写、UI 线程读。</summary>
+        public volatile string PathStatus = "";
+        /// <summary>本进程内是否已经跑过自动定位（避免反复扫盘）。</summary>
+        public bool AutoLocateAttempted;
+        /// <summary>星穹铁道：是否需要重新核对注册表。</summary>
+        public bool RegistryCheckPending = true;
+        /// <summary>星穹铁道：已核对过注册表的 PID（同一进程只核对一次，避免反复写）。</summary>
+        public int RegistryCheckedPid;
+        /// <summary>星穹铁道：最近一次注册表核对的结果文案（同上，跨线程读）。</summary>
+        public volatile string RegistryStatus = "尚未检查注册表";
+        private int _registryCurrentFps = -1;
+        /// <summary>星穹铁道：最近读到的注册表 FPS；null 表示未确认。</summary>
+        public int? RegistryCurrentFps
+        {
+            get
+            {
+                var fps = Volatile.Read(ref _registryCurrentFps);
+                return fps < 0 ? null : fps;
+            }
+            set => Volatile.Write(ref _registryCurrentFps, value ?? -1);
+        }
+        /// <summary>该游戏注入模块的完整路径。</summary>
+        public string StubPath = "";
+        /// <summary>最近一次轮询到的进程 PID；0 表示当前未运行。</summary>
+        public int RunningPid;
+    }
+
+    private readonly AppConfig _config;
+    private readonly IpcSharedMemory _ipc;
+    private readonly CancellationTokenSource _cts = new();
+    private readonly object _raiseLock = new();
+    private readonly Dictionary<GameId, GameSession> _sessions =
+        GameCatalog.All.ToDictionary(game => game.Id, _ => new GameSession());
+
+    private Task? _loop;
+    private Task? _runningStateLoop;
+    /// <summary>
+    /// 当前认为已成功附着的游戏与 PID（IPC 只有一个槽位，同时只附着一款）。
+    /// 后台监视线程写、UI 线程读，用 int 值 + Volatile 保证可见性；0 = 未附着。
+    /// </summary>
+    private int _attachedGameValue;
+    /// <summary>
+    /// 当前检测到正在运行的游戏（星铁只走注册表、无需注入时也算）。
+    /// 两款游戏共用一份运行状态，界面靠它把状态归属到对应游戏，避免互相串台。
+    /// 0 = 没有游戏进程，(int)GameId + 1 = 具体游戏。
+    /// </summary>
+    private int _runningGameValue;
+    /// <summary>
+    /// 界面 / 托盘当前展示的游戏。自动跟随、或手动切到正在运行的游戏时只改这里，
+    /// 不动配置里的用户选择；切到未运行的游戏才通过 <see cref="SetActiveGame"/> 同时改两者。
+    /// </summary>
+    private int _displayGameValue;
+    /// <summary>
+    /// 运行会话号跟踪：新游戏进程出现时 +1，同一进程的检测抖动不重复触发跟随，
+    /// 长时间后的 PID 复用仍会被识别为新会话。
+    /// </summary>
+    private readonly RunningSessionTracker _runningSessions = new();
+    /// <summary>
+    /// 共享内存当前属于哪款游戏的 Stub（注入时确定）。映射只有一个槽位，
+    /// 属于 A 游戏时不能再拿 B 游戏的档案去写它，否则会把 A 的目标帧率 / 开关冲掉。
+    /// 取值与 <see cref="AttachedGame"/> 同一套编码（0 = 未占用）；监视线程写、
+    /// UI 线程也会读（改配置时的 PushConfigToIpc），所以用 int + Volatile。
+    /// </summary>
+    private int _ipcOwnerValue;
+    private int _attachedPid;
+    private string _statusText = "空闲 — 等待游戏启动";
+    private bool _disposed;
+
+    // ---- IPC / UI 节流状态 ----
+    // 这几个字段同时被 UI 线程（用户改配置 → 立即推送）与监视线程（保活推送）读写：
+    // 计数用 volatile，时间戳用 Environment.TickCount64 的 long + Volatile。
+    // （DateTime 不能标 volatile；TickCount64 是单调时钟，也不会被系统对时带偏。）
+    private volatile int _lastPushedFps = int.MinValue;
+    private volatile int _lastPushedEnabled = int.MinValue;
+    private long _lastIpcPushTick;
+    private long _lastUiRaiseTick;
+
+    /// <summary>状态变化（UI 应 Invoke 到 UI 线程后刷新）。</summary>
+    public event Action? StateChanged;
+
+    // 这两个串由后台监视线程写、UI 线程读：引用赋值本身原子，但没有屏障时
+    // UI 可能长时间读到旧值，所以显式走 Volatile（也把这层意图写在代码里）。
+    public string StatusText => Volatile.Read(ref _statusText);
+    /// <summary>当前配置中那款游戏的路径状态（切游戏时界面跟着换）。</summary>
+    public string GamePathStatus => _sessions[DisplayGame].PathStatus;
+    public int AttachedPid => Volatile.Read(ref _attachedPid);
+    /// <summary>当前附着的是哪款游戏（未附着时为 null）。</summary>
+    public GameId? AttachedGame => DecodeGame(Volatile.Read(ref _attachedGameValue));
+    /// <summary>当前检测到正在运行的游戏（没有游戏进程时为 null）。</summary>
+    public GameId? RunningGame => DecodeGame(Volatile.Read(ref _runningGameValue));
+    /// <summary>返回指定游戏最近一次轮询到的进程 PID；0 表示未运行。</summary>
+    public int RunningPid(GameId game) => Volatile.Read(ref _sessions[game].RunningPid);
+    /// <summary>
+    /// 界面 / 托盘当前展示的游戏：自动跟随运行中的游戏时只改这里；
+    /// 用户手动切换才同时改 <see cref="Config"/> 里的 ActiveGame。
+    /// </summary>
+    public GameId DisplayGame => (GameId)Volatile.Read(ref _displayGameValue);
+    /// <summary>运行会话号：新游戏进程启动时 +1，用于托盘只跟随一次。</summary>
+    public int RunningSession => _runningSessions.Session;
+    public IpcStatus StubStatus => _ipc.Read().Status;
+    public int CurrentFpsFeedback => _ipc.Read().CurrentFps;
+
+    /// <summary>Stub 上报的错误码（0xE001 起，0 表示无错误）。</summary>
+    public int LastErrorFeedback => _ipc.Read().LastError;
+
+    /// <summary>Stub 上报的反虚化就绪状态掩码（bit0 虚化 / bit1 马赛克 / bit2 马赛克已生效）。</summary>
+    public int AntiBlurStateFeedback => _ipc.Read().AntiBlurState;
+
+    /// <summary>Stub 上报的 UID 隐藏状态掩码（bit0 已就绪 / bit1 隐藏生效中）。</summary>
+    public int HideUidStateFeedback => _ipc.Read().HideUidState;
+
+    /// <summary>星穹铁道注册表解锁的最近一次核对结果（未启用时说明原因）。</summary>
+    public string StarRailRegistryStatus => _sessions[GameId.StarRail].RegistryStatus;
+    /// <summary>星穹铁道最近一次核对读到的注册表 FPS；null 表示未确认。</summary>
+    public int? StarRailRegistryCurrentFps => _sessions[GameId.StarRail].RegistryCurrentFps;
+
+    public AppConfig Config => _config;
+
+    /// <summary>0 = null，其余为 (int)GameId + 1。</summary>
+    private static GameId? DecodeGame(int value) =>
+        value == 0 ? null : (GameId)(value - 1);
+
+    private static int EncodeGame(GameId game) => (int)game + 1;
+
+    /// <summary>指定游戏是否处于「启用」状态且总开关打开。</summary>
+    public bool IsGameEnabled(GameId game) =>
+        _config.MasterEnabled && _config.Profile(game).Enabled;
+
+    /// <summary>
+    /// 指定游戏是否有任一功能需要把 Stub 注入到游戏进程。
+    /// 星穹铁道的帧率走注册表，只有画面效果才需要注入；
+    /// 总开关关闭时，停止向游戏注入功能。
+    /// </summary>
+    private bool NeedsInjection(GameId game)
+    {
+        if (!_config.MasterEnabled) return false;
+        var descriptor = GameCatalog.Get(game);
+        var profile = _config.Profile(game);
+        var fpsNeedsInject = profile.Enabled && !descriptor.FpsViaRegistry;
+        var features = profile.AntiBlurPerspective
+                       || profile.HideUid
+                       || (descriptor.SupportsDiveMosaic && profile.AntiBlurDiveMosaic)
+                       || (descriptor.SupportsDof && profile.AntiBlurDof);
+        return fpsNeedsInject || features;
+    }
+
+    public UnlockService(AppConfig config)
+    {
+        _config = config;
+        Volatile.Write(ref _displayGameValue, (int)_config.ActiveGame);
+        try
+        {
+            _ipc = new IpcSharedMemory();
+        }
+        catch (Exception ex)
+        {
+            // 共享内存失败不应阻止主窗/托盘；后续注入会提示
+            AppLog.Error(ex, "IpcSharedMemory");
+            throw new InvalidOperationException(
+                "无法初始化进程通信（共享内存）。\n" +
+                "请确认以当前用户身份运行（无需管理员），并检查安全软件是否拦截。\n" +
+                ex.Message, ex);
+        }
+
+        foreach (var game in GameCatalog.All)
+        {
+            var session = _sessions[game.Id];
+            session.StubPath = PathUtil.Normalize(AppPaths.StubPathFor(game));
+            session.PathStatus = "游戏路径: 未设置";
+        }
+
+        // 配置里已经写好的路径直接确认；缺失的交给后台监视循环异步查找，
+        // 避免启动时在 UI 线程上跑磁盘扫描。
+        try { RefreshGamePath(GameId.Genshin, autoLocateIfMissing: false); } catch (Exception ex) { AppLog.Warn(ex.Message); }
+        try { RefreshGamePath(GameId.StarRail, autoLocateIfMissing: false); } catch (Exception ex) { AppLog.Warn(ex.Message); }
+        try { PushConfigToIpc(force: true); } catch (Exception ex) { AppLog.Warn(ex.Message); }
+
+        var registry = StarRailFpsRegistry.Read();
+        _sessions[GameId.StarRail].RegistryCurrentFps = registry.CurrentFps;
+        _sessions[GameId.StarRail].RegistryStatus = registry.Detail;
+    }
+
+    /// <summary>启动后台监视循环（线程池 Task）。</summary>
+    public void Start()
+    {
+        AppLog.Info("UnlockService.Start()");
+        _runningStateLoop = Task.Run(() => RunningStateLoopAsync(_cts.Token));
+        _loop = Task.Run(() => WatchLoopAsync(_cts.Token));
+    }
+
+    /// <summary>
+    /// 用户手动切换当前正在配置的游戏（界面三个游戏页与托盘一起换）。
+    /// 切到「正在运行」的那款属于临时查看：只改展示，不写用户保存的选择；
+    /// 所有游戏进程退出后回退到目录定义的默认页。切到未运行的游戏才保存为新选择。
+    /// 游戏启动时的自动跟随请用 <see cref="SetDisplayGame"/>。
+    /// </summary>
+    public void SetActiveGame(GameId game)
+    {
+        // 运行中的游戏是「当前实际在玩的那款」：用户切过去多半只是看状态，
+        // 不应该覆盖保存的主选择，也不影响游戏退出后的回退。
+        if (GameSelectionPolicy.IsTransientView(game, RunningGame))
+        {
+            SetDisplayGame(game);
+            return;
+        }
+
+        var configChanged = _config.ActiveGame != game;
+        var displayChanged = DisplayGame != game;
+        _config.ActiveGame = game;
+        Volatile.Write(ref _displayGameValue, (int)game);
+        if (!configChanged && !displayChanged) return;
+
+        AppLog.Info($"active game → {GameCatalog.Get(game).Key}");
+        _config.TrySave(out _);
+        Raise(forceUi: true);
+    }
+
+    /// <summary>
+    /// 自动跟随运行中的游戏：只切换界面 / 托盘展示，不写配置或改变用户选择；
+    /// 进程退出后的默认页由托盘状态机统一处理。
+    /// </summary>
+    public void SetDisplayGame(GameId game)
+    {
+        if (DisplayGame == game) return;
+        Volatile.Write(ref _displayGameValue, (int)game);
+        Raise(forceUi: true);
+    }
+
+    /// <summary>
+    /// 将当前附着游戏（没有附着时用界面上选中的游戏）的目标 FPS 与有效开关推入共享内存。
+    /// 默认 400ms 内相同值不重复写，降低 IPC 与日志噪声；force=true 立即推送。
+    /// </summary>
+    public void PushConfigToIpc(bool force = false)
+    {
+        _config.Sanitize();
+        // 自动跟随只影响界面展示，不影响注入目标：IPC 配置始终跟着实际运行 /
+        // 附着的游戏走，其次是用户选择的那款。
+        var game = AttachedGame ?? RunningGame ?? _config.ActiveGame;
+        // 映射已经被另一款游戏的 Stub 占用（它可能仍在运行）：不要动它的任何字段。
+        if (DecodeGame(Volatile.Read(ref _ipcOwnerValue)) is GameId owner && owner != game) return;
+        var descriptor = GameCatalog.Get(game);
+        var profile = _config.Profile(game);
+        var fps = profile.TargetFps;
+        // 走注册表的游戏不通过 Stub 改帧率，只下发画面效果开关。
+        var en = NeedsInjection(game) && profile.Enabled && !descriptor.FpsViaRegistry ? 1 : 0;
+        var now = Environment.TickCount64;
+
+        // 跳过冗余写入
+        var changed = fps != _lastPushedFps || en != _lastPushedEnabled;
+        if (!force && !changed && now - Volatile.Read(ref _lastIpcPushTick) < 400)
+        {
+            return;
+        }
+
+        var featuresActive = _config.MasterEnabled;
+        var stubShouldRun = NeedsInjection(game);
+        if (!stubShouldRun)
+        {
+            var status = _ipc.Read().Status;
+            if (status is IpcStatus.Waiting or IpcStatus.Ready)
+                _ipc.RequestExit();
+        }
+        _ipc.UpdateHostFields(fps, en != 0,
+            featuresActive && profile.AntiBlurPerspective,
+            featuresActive && descriptor.SupportsDiveMosaic && profile.AntiBlurDiveMosaic,
+            featuresActive && profile.HideUid,
+            featuresActive && descriptor.SupportsDof && profile.AntiBlurDof);
+        _lastPushedFps = fps;
+        _lastPushedEnabled = en;
+        Volatile.Write(ref _lastIpcPushTick, now);
+
+        // 只在「真的变了」或强制推送时记一行：保活式的重复写入每秒能有两三次，
+        // 全记下来会把日志文件和界面日志页（现在会实时增量显示宿主日志）刷满。
+        if (force || changed)
+            AppLog.Debug($"IPC push game={descriptor.Key} fps={fps} effective={en != 0}");
+        Raise(forceUi: force);
+    }
+
+    /// <summary>设置指定游戏的目标帧率并持久化、立即推送 IPC。</summary>
+    public void ApplyFps(GameId game, int fps)
+    {
+        var descriptor = GameCatalog.Get(game);
+        _config.Profile(game).TargetFps = descriptor.LockedFps > 0 ? descriptor.LockedFps : fps;
+        _config.Sanitize();
+        _config.TrySave(out _);
+        PushConfigToIpc(force: true);
+    }
+
+    /// <summary>设置指定游戏的帧率解锁开关并推送。</summary>
+    public void SetEnabled(GameId game, bool enabled)
+    {
+        var profile = _config.Profile(game);
+        profile.Enabled = enabled;
+        _config.TrySave(out _);
+
+        var viaRegistry = GameCatalog.Get(game).FpsViaRegistry;
+        // 星穹铁道：开启即核对注册表（已是 120 就不覆盖），关闭不动注册表。
+        if (viaRegistry) _sessions[game].RegistryCheckPending = enabled;
+
+        PushConfigToIpc(force: true);
+        if (viaRegistry && enabled) SyncStarRailRegistry(force: true);
+    }
+
+    /// <summary>设置总开关：关闭时不注入、不强制帧率。</summary>
+    public void SetMasterEnabled(bool enabled)
+    {
+        AppLog.Info($"SetMasterEnabled={enabled}");
+        _config.MasterEnabled = enabled;
+        _config.TrySave(out _);
+        if (enabled) _sessions[GameId.StarRail].RegistryCheckPending = true;
+        PushConfigToIpc(force: true);
+        SetStatus(enabled
+            ? "总开关已开启 — 后台运行中"
+            : "总开关已关闭 — 不会注入 / 不会强制帧率");
+    }
+
+    /// <summary>旧配置兼容入口；自动监视始终作为后台任务开启。</summary>
+    public void SetAutoWatch(bool enabled)
+    {
+        _ = enabled;
+        _config.AutoWatch = true;
+        _config.TrySave(out _);
+        Raise(forceUi: true);
+    }
+
+    /// <summary>反角色虚化注入开关（迁移自 Snap.Hutao.Remastered）：保存并推送 IPC。</summary>
+    public void SetAntiBlurPerspective(GameId game, bool enabled)
+    {
+        _config.Profile(game).AntiBlurPerspective = enabled;
+        _config.TrySave(out _);
+        PushConfigToIpc(force: true);
+    }
+
+    /// <summary>移除水下马赛克注入开关（仅原神模块提供）：保存并推送 IPC。</summary>
+    public void SetAntiBlurDiveMosaic(GameId game, bool enabled)
+    {
+        var descriptor = GameCatalog.Get(game);
+        _config.Profile(game).AntiBlurDiveMosaic = descriptor.SupportsDiveMosaic && enabled;
+        _config.TrySave(out _);
+        PushConfigToIpc(force: true);
+    }
+
+    /// <summary>反场景景深虚化注入开关（仅星铁模块提供）：保存并推送 IPC。</summary>
+    public void SetAntiBlurDof(GameId game, bool enabled)
+    {
+        var descriptor = GameCatalog.Get(game);
+        _config.Profile(game).AntiBlurDof = descriptor.SupportsDof && enabled;
+        _config.TrySave(out _);
+        PushConfigToIpc(force: true);
+    }
+
+    /// <summary>隐藏 UID 注入开关（同源迁移自 Snap.Hutao.Remastered）：保存并推送 IPC。</summary>
+    public void SetHideUid(GameId game, bool enabled)
+    {
+        _config.Profile(game).HideUid = enabled;
+        _config.TrySave(out _);
+        PushConfigToIpc(force: true);
+    }
+
+    /// <summary>
+    /// 按配置同步登录自启：普通权限写 HKCU\Run，管理员权限登记最高权限计划任务
+    /// （二选一，见 <see cref="Autostart.SyncLoginStartup"/>）。结果同时记录在
+    /// <see cref="Autostart.LastReport"/>，界面据此显示实际生效的方式与提示。
+    /// </summary>
+    public Autostart.AutostartReport SyncAutostart() => Autostart.SyncLoginStartup(
+        _config.AutoStartWithWindows,
+        _config.AutoStartAsAdministrator,
+        configLoadedFromDisk: true);
+
+    /// <summary>刷新指定游戏的路径状态；配置无效且 autoLocateIfMissing 时自动多源查找。</summary>
+    public GameLocateResult RefreshGamePath(GameId game, bool autoLocateIfMissing)
+    {
+        var descriptor = GameCatalog.Get(game);
+        var profile = _config.Profile(game);
+        var session = _sessions[game];
+
+        if (GameLocator.IsValidGameExe(descriptor, profile.GamePath))
+        {
+            profile.GamePath = PathUtil.Normalize(profile.GamePath);
+            session.PathStatus = $"游戏路径: {profile.GamePath}（{GameLocator.SourceDisplayName(GameLocateSource.Config)}）";
+            return GameLocateResult.Success(profile.GamePath!, GameLocateSource.Config);
+        }
+
+        if (!autoLocateIfMissing)
+        {
+            session.PathStatus = "游戏路径: 未设置";
+            return GameLocateResult.Fail("未设置");
+        }
+
+        var result = GameLocator.LocateAutomatic(descriptor, profile.GamePath);
+        if (result.Ok && result.Path is not null)
+        {
+            profile.GamePath = PathUtil.Normalize(result.Path);
+            _config.TrySave(out _);
+            session.PathStatus = $"游戏路径: {profile.GamePath}（{GameLocator.SourceDisplayName(result.Source)}）";
+        }
+        else
+        {
+            session.PathStatus = $"游戏路径: 未找到 — {result.Detail}";
+        }
+        session.AutoLocateAttempted = true;
+
+        Raise(forceUi: true);
+        return result;
+    }
+
+    /// <summary>通过外壳交互手动选择指定游戏的主程序。</summary>
+    public GameLocateResult SetGamePathManual(GameId game, IUserInteraction interaction)
+    {
+        var descriptor = GameCatalog.Get(game);
+        var profile = _config.Profile(game);
+        var session = _sessions[game];
+        var result = GameLocator.LocateManual(descriptor, interaction);
+        if (result.Ok && result.Path is not null)
+        {
+            profile.GamePath = PathUtil.Normalize(result.Path);
+            _config.TrySave(out _);
+            session.PathStatus = $"游戏路径: {profile.GamePath}（手动选择）";
+            AppLog.Info($"manual game path ({descriptor.Key}): {profile.GamePath}");
+            Raise(forceUi: true);
+        }
+        return result;
+    }
+
+    /// <summary>直接写入指定游戏的主程序路径（前端 setGamePath 调用，路径已校验）。</summary>
+    public GameLocateResult SetGamePath(GameId game, string path)
+    {
+        var descriptor = GameCatalog.Get(game);
+        var normalized = PathUtil.Normalize(path);
+        if (!GameLocator.IsValidGameExe(descriptor, normalized))
+            return GameLocateResult.Fail($"请选择 {GameCatalog.ExeNameList(descriptor)}");
+
+        _config.Profile(game).GamePath = normalized;
+        _config.TrySave(out _);
+        _sessions[game].PathStatus = $"游戏路径: {normalized}（手动选择）";
+        Raise(forceUi: true);
+        return GameLocateResult.Success(normalized, GameLocateSource.Manual);
+    }
+
+    /// <summary>忽略当前配置路径，强制自动多源查找指定游戏。</summary>
+    public GameLocateResult AutoLocateGamePath(GameId game)
+    {
+        var descriptor = GameCatalog.Get(game);
+        var profile = _config.Profile(game);
+        var session = _sessions[game];
+        if (!GameLocator.IsValidGameExe(descriptor, profile.GamePath))
+            profile.GamePath = null;
+
+        var result = GameLocator.LocateAutomatic(descriptor, null);
+        if (result.Ok && result.Path is not null)
+        {
+            AppLog.Info($"game path auto ({descriptor.Key}): {result.Path} source={result.Source}");
+            profile.GamePath = PathUtil.Normalize(result.Path);
+            _config.TrySave(out _);
+            session.PathStatus = $"游戏路径: {profile.GamePath}（{GameLocator.SourceDisplayName(result.Source)}）";
+        }
+        else
+        {
+            AppLog.Warn($"game path auto failed ({descriptor.Key}): {result.Detail}");
+            session.PathStatus = $"自动查找失败: {result.Detail}";
+        }
+        session.AutoLocateAttempted = true;
+
+        Raise(forceUi: true);
+        return result;
+    }
+
+    /// <summary>
+    /// 星穹铁道：核对并（必要时）写入注册表里的 120 FPS。
+    /// 启用解锁时才调用；已经是 120 就不覆盖，关闭开关不会走到这里。
+    /// </summary>
+    public StarRailFpsResult SyncStarRailRegistry(bool force = false)
+    {
+        var session = _sessions[GameId.StarRail];
+        var profile = _config.Profile(GameId.StarRail);
+
+        if (!_config.MasterEnabled || !profile.Enabled)
+        {
+            session.RegistryCheckPending = false;
+            var current = StarRailFpsRegistry.Read();
+            session.RegistryCurrentFps = current.CurrentFps;
+            session.RegistryStatus = current.Detail;
+            return current;
+        }
+
+        if (!force && !session.RegistryCheckPending)
+        {
+            var current = StarRailFpsRegistry.Read();
+            session.RegistryCurrentFps = current.CurrentFps;
+            session.RegistryStatus = current.Detail;
+            return current;
+        }
+
+        session.RegistryCheckPending = false;
+        var result = StarRailFpsRegistry.Ensure();
+        session.RegistryCurrentFps = result.CurrentFps;
+        session.RegistryStatus = result.Detail;
+        if (result.Changed) AppLog.Info("star rail registry fps: " + result.Detail);
+        else AppLog.Debug("star rail registry fps: " + result.Detail);
+        Raise(forceUi: true);
+        return result;
+    }
+
+    /// <summary>若指定游戏未运行则尝试启动已配置的主程序。</summary>
+    public bool TryLaunchGame(GameId game, out string message)
+    {
+        var descriptor = GameCatalog.Get(game);
+        if (GameProcess.Find(descriptor) is not null)
+        {
+            message = $"{descriptor.DisplayName}已在运行";
+            return false;
+        }
+
+        RefreshGamePath(game, autoLocateIfMissing: true);
+        var profile = _config.Profile(game);
+        if (!GameLocator.IsValidGameExe(descriptor, profile.GamePath))
+        {
+            message = $"未配置{descriptor.DisplayName}的有效游戏路径，请先自动查找或手动选择";
+            return false;
+        }
+
+        try
+        {
+            var path = PathUtil.Normalize(profile.GamePath!);
+            // 星穹铁道的帧率来自注册表：启动前先核对一次，游戏读到 120 才会生效。
+            if (descriptor.FpsViaRegistry) SyncStarRailRegistry(force: true);
+            // 当前宿主已经是管理员时直接 CreateProcess，让子进程继承现有令牌。
+            // 一律交给 ShellExecute 会再次经过 Shell 的兼容性/UAC 判断，导致
+            // 用户已经授权后点击「启动游戏」仍重复弹窗。普通权限下保留
+            // ShellExecute，让游戏自身的 requireAdministrator 清单按系统规则提示。
+            var psi = new ProcessStartInfo
+            {
+                FileName = path,
+                WorkingDirectory = PathUtil.GetDirectoryNameSafe(path) ?? "",
+                UseShellExecute = !Elevation.IsAdministrator(),
+            };
+            Process.Start(psi)?.Dispose();
+            message = $"已启动{descriptor.DisplayName}: {path}";
+            AppLog.Info(message);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error(ex, "launch game");
+            message = $"启动失败: {ex.Message}";
+            return false;
+        }
+    }
+
+    /// <summary>通知 Stub 退出并停止监视循环。</summary>
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        try { _ipc.RequestExit(); } catch { /* ignore */ }
+        _cts.Cancel();
+        try { _loop?.Wait(2000); } catch { /* ignore */ }
+        try { _runningStateLoop?.Wait(2000); } catch { /* ignore */ }
+        _cts.Dispose();
+        _ipc.Dispose();
+        AppLog.Info("UnlockService disposed");
+    }
+}

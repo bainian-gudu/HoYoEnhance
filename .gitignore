@@ -1,0 +1,72 @@
+# Build outputs (cmake / intermediate)
+build/
+out/
+dist/
+bin/
+obj/
+target/
+artifacts/
+node_modules/
+.vs/
+*.user
+*.suo
+*.sdf
+*.opensdf
+cmake-build-*/
+
+# Local config / logs
+config.json
+*.log
+
+# Compiled binaries in tree (CI produces under dist/ ; packaging/tools/)
+*.dll
+*.exe
+*.pdb
+!third_party/**
+
+
+# OS / editor
+.arena/
+.cache/
+.local/
+.DS_Store
+Thumbs.db
+*~
+__pycache__/
+*.pyc
+
+# Extra docs (do not track) — 仓库内维护的说明文档例外
+docs/
+*.md
+!README.md
+!packaging/README.md
+!tools/devcheck/README.md
+!src/StubStarRail/SIGNATURES.md
+
+# ---------------------------------------------------------------------------
+# 安装包打包（packaging/）
+#   打包脚本与配置需要进版本库（pack.ps1 / packaging.config.json / README.md）；
+#   安装器工具链（源码快照 → kirara-builder.exe）在独立项目 Kirara
+# ---------------------------------------------------------------------------
+packaging/tools/
+
+# Web UI
+src/Ui/node_modules/
+src/Ui/dist/
+src/Ui/*.tsbuildinfo
+
+assets-gen/
+
+# ---------------------------------------------------------------------------
+# devcheck（tools/devcheck/）—— 本地快速体检，见 tools/devcheck/README.md
+#   检查用的源码是生成物，不入库；说明文档要入库（上面 *.md 被忽略）
+# ---------------------------------------------------------------------------
+tools/devcheck/rust/*/src/gen/
+tools/devcheck/front/gen/
+tools/devcheck/front/.prettierrc
+tools/devcheck/_selftest/
+tools/devcheck/front/_selftest/
+# -SelfTest 的仓库内改动锁与备份（进程被杀后靠它们恢复并清场）
+tools/devcheck/.repo-lock
+tools/devcheck/.selftest-backup/
+!tools/devcheck/README.md

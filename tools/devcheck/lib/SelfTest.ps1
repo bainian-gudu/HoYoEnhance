@@ -1,0 +1,303 @@
+# devcheck 自检（被 devcheck.ps1 dot-source）
+#
+# 证明这套检查不是空壳：往**真实文件 / 临时文件**里注入错误，逐个确认对应层会失败。
+# 任何一层「注入了错误却没报错」= 自检失败。
+
+function Invoke-SelfTest {
+    $tmpDir = Join-Path $DevCheckRoot '_selftest'
+    $cases = [System.Collections.Generic.List[object]]::new()
+
+    function Add-Case {
+        param([string]$Name, [scriptblock]$Mutate, [scriptblock]$Run, [scriptblock]$Cleanup = {})
+        $cases.Add([pscustomobject]@{ Name = $Name; Mutate = $Mutate; Run = $Run; Cleanup = $Cleanup })
+    }
+
+    # --- 1) vendor：kachina 源码又被搬回本仓库就必须报错 ---
+    $staleKachina = Join-Path $RepoRoot 'packaging/kachina'
+    Add-Case 'vendor 层能抓到 kachina 源码被搬回来' `
+        -Mutate {
+            New-Item -ItemType Directory -Path $staleKachina -Force | Out-Null
+            Set-Content -Path (Join-Path $staleKachina 'package.json') -Encoding utf8 -Value '{"name":"kachina-installer"}'
+        } `
+        -Run { Test-KiraraBoundary } `
+        -Cleanup { if (Test-Path -LiteralPath $staleKachina) { Remove-Item -LiteralPath $staleKachina -Recurse -Force } }
+
+    # --- 2) vendor：工作流里出现从外部拉取的动作就必须报错 ---
+    $badWorkflow = Join-Path $RepoRoot '.github/workflows/zz-devcheck-selftest.yml'
+    Add-Case 'vendor 层能抓到工作流从外部拉取' `
+        -Mutate {
+            Set-Content -Path $badWorkflow -Encoding utf8 -Value @'
+name: selftest
+on: workflow_dispatch
+jobs:
+  x:
+    runs-on: ubuntu-latest
+    steps:
+      - run: Invoke-WebRequest https://example.invalid/kirara-builder.exe -OutFile packaging/tools/kirara-builder.exe
+'@
+        } `
+        -Run { Test-KiraraBoundary } `
+        -Cleanup { if (Test-Path -LiteralPath $badWorkflow) { Remove-Item -LiteralPath $badWorkflow -Force } }
+
+    # --- 3) vendor：打包脚本不再指向 Kirara 就必须报错 ---
+    $packScript = Join-Path $RepoRoot 'packaging/pack.ps1'
+    Add-Case 'vendor 层能抓到打包脚本不再引用 Kirara' `
+        -Mutate {
+            $text = [System.IO.File]::ReadAllText($packScript)
+            $broken = $text.Replace('$KiraraRepo', '$SomewhereElse')
+            if ($broken -eq $text) { throw '注入失败：pack.ps1 里没有 $KiraraRepo' }
+            [System.IO.File]::WriteAllText($packScript, $broken)
+        } `
+        -Run { Test-KiraraBoundary } `
+        -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $packScript) -Path $packScript }
+
+    # --- 3b) vendor：build.yml 不再从 Kirara 的 Release 取 builder 就必须报错 ---
+    $buildYml = Join-Path $RepoRoot '.github/workflows/build.yml'
+    Add-Case 'vendor 层能抓到 builder 来源不再是 Kirara Release' `
+        -Mutate {
+            $text = [System.IO.File]::ReadAllText($buildYml)
+            $broken = $text.Replace('bainian-gudu/Kirara', 'example/Elsewhere')
+            if ($broken -eq $text) { throw '注入失败：build.yml 里没有 bainian-gudu/Kirara' }
+            [System.IO.File]::WriteAllText($buildYml, $broken)
+        } `
+        -Run { Test-KiraraBoundary } `
+        -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $buildYml) -Path $buildYml }
+
+    # --- 3c) vendor：-BuilderPath 不再隐含跳过 Kirara 就必须报错 ---
+    Add-Case 'vendor 层能抓到 -BuilderPath 仍去找 Kirara 源码' `
+        -Mutate {
+            $text = [System.IO.File]::ReadAllText($packScript)
+            $broken = $text.Replace('if ($BuilderPath) { $SkipBuilderBuild = $true }', 'if ($false) { $SkipBuilderBuild = $true }')
+            if ($broken -eq $text) { throw '注入失败：pack.ps1 里没有 -BuilderPath 隐含跳过的分支' }
+            [System.IO.File]::WriteAllText($packScript, $broken)
+        } `
+        -Run { Test-KiraraBoundary } `
+        -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $packScript) -Path $packScript }
+
+    # --- 3d) vendor：builder 路径不再固化绝对路径就必须报错 ---
+    Add-Case 'vendor 层能抓到 builder 路径没固化成绝对路径' `
+        -Mutate {
+            $text = [System.IO.File]::ReadAllText($packScript)
+            $broken = $text.Replace('$Builder = Get-AbsolutePath $Builder', '$Builder = $Builder')
+            if ($broken -eq $text) { throw '注入失败：pack.ps1 里没有 $Builder 的绝对路径固化' }
+            [System.IO.File]::WriteAllText($packScript, $broken)
+        } `
+        -Run { Test-KiraraBoundary } `
+        -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $packScript) -Path $packScript }
+
+    # --- 3e) vendor：build.yml 不再上传便携包就必须报错 ---
+    Add-Case 'vendor 层能抓到便携包不再上传' `
+        -Mutate {
+            $text = [System.IO.File]::ReadAllText($buildYml)
+            $normalized = $text.Replace("`r`n", "`n")
+            $broken = $normalized.Replace("            artifacts/*.7z`n", '')
+            if ($broken -eq $normalized) { throw '注入失败：build.yml 里没有 artifacts/*.7z 上传路径' }
+            [System.IO.File]::WriteAllText($buildYml, $broken)
+        } `
+        -Run { Test-KiraraBoundary } `
+        -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $buildYml) -Path $buildYml }
+
+    # --- 4) ps1：临时放一个语法错误的 .ps1 进仓库 ---
+    Add-Case 'ps1 层能抓到 PowerShell 语法错误' `
+        -Mutate {
+            New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
+            Set-Content -Path (Join-Path $tmpDir 'broken.ps1') -Value 'if ($x { Write-Host "unclosed" ' -Encoding utf8
+        } `
+        -Run { Test-Ps1Syntax }
+
+    # --- 5) packaging：打包配置与宿主源码对不上就必须报错 ---
+    $profile = Join-Path $RepoRoot 'packaging/packaging.config.json'
+    Add-Case 'packaging 层能抓到打包配置与宿主不一致' `
+        -Mutate {
+            $text = [System.IO.File]::ReadAllText($profile)
+            $broken = $text.Replace('"exeName": "HoYoEnhance.exe"', '"exeName": "SomethingElse.exe"')
+            if ($broken -eq $text) { throw '注入失败：packaging.config.json 里没有 exeName 的当前取值' }
+            [System.IO.File]::WriteAllText($profile, $broken)
+        } `
+        -Run { Test-PackagingProfile } `
+        -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $profile) -Path $profile }
+
+    # --- 5b) packaging：数据目录回退链被删就必须报错 ---
+    $appPaths = Join-Path $RepoRoot 'src/Core/AppPaths.cs'
+    Add-Case 'packaging 层能抓到数据目录回退被删' `
+        -Mutate {
+            $text = [System.IO.File]::ReadAllText($appPaths)
+            $broken = $text.Replace('Environment.SpecialFolder.ApplicationData', 'Environment.SpecialFolder.UserProfile')
+            if ($broken -eq $text) { throw '注入失败：AppPaths.cs 里没有 Roaming AppData 回退' }
+            [System.IO.File]::WriteAllText($appPaths, $broken)
+        } `
+        -Run { Test-PackagingProfile } `
+        -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $appPaths) -Path $appPaths }
+
+    # --- 5c) packaging：便携 zip 分支被删就必须报错 ---
+    Add-Case 'packaging 层能抓到便携 zip 分支被删' `
+        -Mutate {
+            $text = [System.IO.File]::ReadAllText($packScript)
+            $needle = 'Compress-Archive -Path $PortableDir -DestinationPath $zip -Force'
+            $broken = $text.Replace($needle, '# portable zip disabled')
+            if ($broken -eq $text) { throw '注入失败：pack.ps1 里没有 Compress-Archive 便携 zip 分支' }
+            [System.IO.File]::WriteAllText($packScript, $broken)
+        } `
+        -Run { Test-PackagingProfile } `
+        -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $packScript) -Path $packScript }
+
+    # --- 5d) packaging：运行库前置检查没有接线就必须报错 ---
+    $program = Join-Path $RepoRoot 'src/Host/Program.cs'
+    Add-Case 'packaging 层能抓到运行库前置未接线' `
+        -Mutate {
+            $text = [System.IO.File]::ReadAllText($program)
+            $needle = 'RuntimePrerequisite.EnsureOrPrompt(quiet || isAutostart)'
+            $broken = $text.Replace($needle, 'true')
+            if ($broken -eq $text) { throw '注入失败：Program.cs 里没有 RuntimePrerequisite 调用' }
+            [System.IO.File]::WriteAllText($program, $broken)
+        } `
+        -Run { Test-PackagingProfile } `
+        -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $program) -Path $program }
+
+    # --- 5e) packaging：界面资源点名了却读不到就必须报错 ---
+    Add-Case 'packaging 层能抓到安装界面资源文件缺失' `
+        -Mutate {
+            $text = [System.IO.File]::ReadAllText($profile)
+            $broken = $text.Replace('"imageFile": "left.webp"', '"imageFile": "left-missing.webp"')
+            if ($broken -eq $text) { throw '注入失败：packaging.config.json 里没有 imageFile 的当前取值' }
+            [System.IO.File]::WriteAllText($profile, $broken)
+        } `
+        -Run { Test-PackagingProfile } `
+        -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $profile) -Path $profile }
+
+    # --- 6) hosttest：把 ProcessRunner 超时路径上的 KillTree 拿掉 ---
+    #      只注入一个能编过的行为错误（少杀进程树，而不是改标记或提前 return，
+    #      后两者会带 CS0162 噪音或者只在特定断言上暴露）。
+    $processRunner = Join-Path $RepoRoot 'src/Core/ProcessRunner.cs'
+    Add-Case 'hosttest 层能抓到超时没杀进程树' `
+        -Mutate {
+            $text = [System.IO.File]::ReadAllText($processRunner)
+            # 换行可能是 LF 也可能是 CRLF（取决于 checkout 时的 autocrlf），
+            # 先归一化成 LF 再匹配，否则在 Windows runner 上会「注入失败」。
+            $broken = $text.Replace("`r`n", "`n").Replace("                KillTree(process);`n", '')
+            if ($broken -eq $text) { throw '注入失败：没找到 ProcessRunner 的超时分支' }
+            [System.IO.File]::WriteAllText($processRunner, $broken)
+        } `
+        -Run { Test-HostTest } `
+        -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $processRunner) -Path $processRunner }
+
+    # --- 7) hosttest：磁盘快扫的目录剪枝被改坏 ---
+    #      注入方式是删掉剪枝表里的系统目录那一行（而不是 return false），
+    #      编译干净、没有 CS0162 噪音，只有真的跑断言才会发现。
+    $gameLocatorHelpers = Join-Path $RepoRoot 'src/Core/GameLocator.Helpers.cs'
+    Add-Case 'hosttest 层能抓到快扫不再剪枝系统目录' `
+        -Mutate {
+            $text = [System.IO.File]::ReadAllText($gameLocatorHelpers)
+            # 换行可能是 LF 也可能是 CRLF（取决于 checkout 时的 autocrlf）。
+            $needle = '        "Windows", "WinSxS", "System32", "SysWOW64", "SystemApps", "servicing",' + "`n"
+            $broken = $text.Replace("`r`n", "`n").Replace($needle, '')
+            if ($broken -eq $text) { throw '注入失败：没找到剪枝表里的系统目录行' }
+            [System.IO.File]::WriteAllText($gameLocatorHelpers, $broken)
+        } `
+        -Run { Test-HostTest } `
+        -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $gameLocatorHelpers) -Path $gameLocatorHelpers }
+
+    # --- 8) host：Core 工程重新引入 WinForms 就必须报错 ---
+    $coreProject = Join-Path $RepoRoot 'src/Core/HoYoEnhance.Core.csproj'
+    Add-Case 'host 层能抓到 Core 重新依赖 WinForms' `
+        -Mutate {
+            $text = [System.IO.File]::ReadAllText($coreProject)
+            $needle = '<TargetFramework>net9.0-windows10.0.18362.0</TargetFramework>'
+            $broken = $text.Replace($needle, $needle + "`n    <UseWindowsForms>true</UseWindowsForms>")
+            if ($broken -eq $text) { throw '注入失败：没找到 Core 的 TargetFramework' }
+            [System.IO.File]::WriteAllText($coreProject, $broken)
+        } `
+        -Run { Test-Host } `
+        -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $coreProject) -Path $coreProject }
+
+    # --- 9) contract：C# DTO 改了但 TypeScript 契约没有重新生成就必须报错 ---
+    $contractSource = Join-Path $RepoRoot 'src/Contracts/UiConfigContract.cs'
+    Add-Case 'contract 层能抓到 C# DTO 改了但 TS 没重新生成' `
+        -Mutate {
+            $text = [System.IO.File]::ReadAllText($contractSource)
+            $needle = '    public int TargetFps { get; init; } = 120;'
+            $broken = $text.Replace($needle, $needle + "`n    public string? ContractSelfTest { get; init; }")
+            if ($broken -eq $text) { throw '注入失败：没找到 GameProfileDto.TargetFps' }
+            [System.IO.File]::WriteAllText($contractSource, $broken)
+        } `
+        -Run { Test-Contracts } `
+        -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $contractSource) -Path $contractSource }
+
+    # --- 10) version：VERSION 改了但派生文件没同步就必须报错 ---
+    #       注入方式是只改派生文件、不动 VERSION，等价于「手改了版本号却没走唯一来源」。
+    $manifest = Join-Path $RepoRoot 'src/Host/app.manifest'
+    Add-Case 'version 层能抓到派生版本号与 VERSION 不一致' `
+        -Mutate {
+            $text = [System.IO.File]::ReadAllText($manifest)
+            $broken = $text -replace '(?<=<assemblyIdentity version=")[^"]*', '9.9.9.0'
+            if ($broken -eq $text) { throw '注入失败：app.manifest 里没有 assemblyIdentity version' }
+            [System.IO.File]::WriteAllText($manifest, $broken)
+        } `
+        -Run { Test-VersionSync } `
+        -Cleanup { Restore-RepoFile -Backup (Get-RepoBackupPath -Path $manifest) -Path $manifest }
+
+    # 先按磁盘备份清掉上一次被中断的自检留下的注入，再上锁独占。
+    Clear-RepoMutations
+    $caught = 0; $missed = 0; $skipped = 0
+
+    Enter-RepoLock
+    try {
+        Write-Step 'selftest 注入错误自检'
+        $idx = 0
+        foreach ($c in $cases) {
+            $idx++
+            try {
+                # Mutate 之前先把原始内容落到磁盘：进程被杀也留得下恢复依据。
+                # 只在备份不存在时写：否则某个用例没清干净时，备份会被「已污染」的
+                # 内容覆盖，之后再也回不到原始版本。
+                foreach ($rel in $script:SelfTestRepoFiles) {
+                    $path = Join-Path $RepoRoot $rel
+                    if (-not (Test-Path -LiteralPath (Get-RepoBackupPath -Path $path))) {
+                        Backup-RepoFile -Path $path | Out-Null
+                    }
+                }
+                & $c.Mutate
+            }
+            catch {
+                $missed++
+                Write-Bad "  ✗ $($c.Name) —— 注入失败: $($_.Exception.Message)"
+                continue
+            }
+            Write-Host "  ── 注入 $idx/$($cases.Count)：$($c.Name)" -ForegroundColor DarkYellow
+            Write-Host '     ↓ 接下来这段报错是故意注入的，看到它才说明这层没被架空' -ForegroundColor DarkGray
+            $outcome = 'CAUGHT'
+            try {
+                & $c.Run | Out-Null
+                $outcome = 'MISSED'
+            }
+            catch [LayerSkipped] { $outcome = 'SKIPPED' }
+            catch { $outcome = 'CAUGHT' }
+            try { & $c.Cleanup } catch { }
+
+            switch ($outcome) {
+                'CAUGHT'  { $caught++;  Write-Ok "  ✓ $($c.Name)" }
+                'SKIPPED' { $skipped++; Write-Info "  - $($c.Name)（缺工具链，跳过）" }
+                'MISSED'  { $missed++;  Write-Bad "  ✗ $($c.Name) —— 注入了错误却没报错，这层是空壳！" }
+            }
+        }
+
+        # 收尾：删掉临时目录
+        if (Test-Path -LiteralPath $tmpDir) { Remove-Item -LiteralPath $tmpDir -Recurse -Force }
+    }
+    finally {
+        # 无论正常结束还是抛异常，都要把仓库内的注入还原并放锁。
+        Clear-RepoMutations -Quiet
+        # Backup-RepoFile 会顺手建目录，这里再兜底删一次，避免留下空目录。
+        Remove-Item -LiteralPath (Get-SelfTestBackupDir) -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath (Get-SelfTestBackupDir) -Recurse -Force -ErrorAction SilentlyContinue
+        Exit-RepoLock
+    }
+
+    Write-Host ''
+    if ($missed) {
+        Write-Host "✗ 自检失败：$missed 个注入错误没被抓到" -ForegroundColor Red
+        return $false
+    }
+    Write-Host "✓ 自检通过：$caught 个注入错误全部被抓到$(if ($skipped) { "，$skipped 个因缺工具链跳过" } else { '' })" -ForegroundColor Green
+    return $true
+}

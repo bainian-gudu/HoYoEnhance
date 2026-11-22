@@ -1,0 +1,129 @@
+import { Check, ChevronRight, Download, FileJson, FolderOpen, Info, LoaderCircle, RotateCcw, Settings2, Shield, ShieldCheck, SlidersHorizontal, Trash2, Upload, WandSparkles } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
+import type { GameId, GameProfile, LogLevel, UnlockerConfig, UpdateConfig, UpdateGameConfig } from '../lib/config';
+import { GAME_META } from '../lib/config';
+import type { AutostartState } from '../lib/native';
+import { markKeyboardFocus } from '../lib/focus';
+import { FpsControl } from '../components/FpsControl';
+import { PageHeading, ToggleRow } from '../components/ui';
+
+function NumberSetting({ title, description, value, min, max, unit, onChange }: {
+  title: string; description: string; value: number; min: number; max: number; unit: string; onChange: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(value));
+  const [error, setError] = useState(false);
+  useEffect(() => { setDraft(String(value)); setError(false); }, [value]);
+  const commit = () => {
+    const next = Number(draft);
+    if (!draft || !Number.isInteger(next) || next < min || next > max) { setError(true); return; }
+    setDraft(String(next)); setError(false); onChange(next);
+  };
+  return <div className="setting-row"><div><span className="row-title">{title}</span><p className={error ? 'field-error' : ''}>{error ? `请输入 ${min} 至 ${max} 之间的整数` : description}</p></div><div className="number-setting"><input aria-label={title} type="number" min={min} max={max} value={draft} aria-invalid={error} onChange={(event) => setDraft(event.target.value)} onBlur={commit} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }} /><span>{unit}</span></div></div>;
+}
+
+/**
+ * 游戏设置页：内容全部属于「当前游戏」，切换游戏请用顶栏的游戏切换器。
+ * 「启动与行为」「高级设置」两个标签是解锁器级设置，对所有游戏生效。
+ */
+export function SettingsPage({ game, gameConfig, updateGameConfig, config, updateConfig, onPath, onExport, onImport, onReset, onUninstall, busy, isNative, isElevated, onRestartElevated, elevating, autostart }: {
+  game: GameId; gameConfig: GameProfile; updateGameConfig: UpdateGameConfig;
+  config: UnlockerConfig; updateConfig: UpdateConfig; onPath: () => void; onExport: () => void; onImport: () => void; onReset: () => void; onUninstall?: () => void; busy: boolean; isNative?: boolean;
+  isElevated?: boolean; onRestartElevated?: () => void; elevating?: boolean; autostart: AutostartState;
+}) {
+  const [tab, setTab] = useState<'game' | 'behavior' | 'advanced'>('game');
+  // scope 标记解锁器级设置（对所有游戏生效），游戏标签下的内容全部属于当前游戏。
+  const tabs: readonly { id: 'game' | 'behavior' | 'advanced'; label: string; icon: LucideIcon; scope?: string }[] = [
+    { id: 'game', label: '游戏与解锁', icon: SlidersHorizontal },
+    { id: 'behavior', label: '启动与行为', icon: Settings2, scope: '全局' },
+    { id: 'advanced', label: '高级设置', icon: FileJson, scope: '全局' },
+  ];
+  const meta = GAME_META[game];
+
+  // 登录自启的说明跟着宿主回报的「实际生效方式」走，不再写死「开机自启永远是普通权限」：
+  // 计划任务没登记成功（例如当前不是管理员）时，把宿主给的原因直接显示出来。
+  const autostartNotice = autostart.notice ?? (
+    autostart.mode === 'elevated' ? '登录时由最高权限计划任务启动，不会弹出 UAC。'
+      : autostart.mode === 'standard' ? '登录后以标准权限启动，不会弹出 UAC。'
+        : null);
+
+  function handleTabKey(event: ReactKeyboardEvent<HTMLDivElement>) {
+    const current = tabs.findIndex((item) => item.id === tab);
+    const next = event.key === 'ArrowRight' ? (current + 1) % tabs.length
+      : event.key === 'ArrowLeft' ? (current - 1 + tabs.length) % tabs.length
+      : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -1;
+    if (next < 0) return;
+    event.preventDefault();
+    markKeyboardFocus();
+    setTab(tabs[next].id);
+    document.getElementById(`tab-${tabs[next].id}`)?.focus();
+  }
+
+  return <>
+    <PageHeading title="游戏设置" description="按你的习惯，配置每一次启动。"><span className="autosave-label"><Check size={14} />更改自动保存</span></PageHeading>
+    <div className="tabs" role="tablist" aria-label="设置分类" onKeyDown={handleTabKey}>
+      {tabs.map(({ id, label, icon: Icon, scope }) => (
+        <button role="tab" key={id} id={`tab-${id}`} tabIndex={tab === id ? 0 : -1}
+          aria-controls={tab === id ? `settings-${id}` : undefined} aria-selected={tab === id}
+          className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>
+          <Icon size={16} />{label}{scope && <span className="tab-chip">{scope}</span>}
+        </button>
+      ))}
+    </div>
+    <div role="tabpanel" id={`settings-${tab}`} aria-labelledby={`tab-${tab}`} className="settings-tab-content" key={tab}>
+      {tab === 'game' && <>
+        <div className="settings-game-grid">
+          <FpsControl value={gameConfig.targetFps} enabled={gameConfig.enabled} masterEnabled={config.masterEnabled} lock={meta.fpsLock} onChange={(value) => updateGameConfig('targetFps', value)} onToggle={(value) => updateGameConfig('enabled', value)} />
+          <section className="control-panel settings-control"><div className="panel-heading"><h2><WandSparkles size={18} />画面效果注入</h2><span className="module-chip" title="该游戏独立的注入模块">{meta.injection.module}</span></div>
+            {meta.injection.features.map(({ key, title, description }) => (
+              <ToggleRow key={key} title={title} description={description} checked={gameConfig[key]} onChange={(value) => updateGameConfig(key, value)} />
+            ))}
+            <p className="settings-small-note"><Info size={14} />{meta.injection.features.length} 项功能随游戏进程注入即时生效，由 {meta.injection.module} 独立提供。{game === 'genshin' ? '仅供单机体验，联机与千星奇域等玩法中请保持关闭；' : ''}游戏版本更新后若未生效，请等待特征适配更新。</p>
+          </section>
+        </div>
+        <section className="control-panel settings-path-panel"><div className="panel-heading"><h2><FolderOpen size={18} />游戏安装位置</h2><button className="text-button" onClick={onPath} disabled={busy}>更改路径<ChevronRight size={15} /></button></div><p className="path-display">{gameConfig.gamePath || '尚未设置游戏路径'}</p><p className="input-help">{meta.pathHint}路径只对当前游戏生效，切换游戏后可以分别设置。</p></section>
+      </>}
+      {tab === 'behavior' && <section className="control-panel setting-list"><div className="section-intro"><h2>更安静，也更顺手</h2><p>让解锁器融入你的游戏习惯，无需每次重复操作。以下设置对所有游戏生效。</p></div>
+        <ToggleRow title="解锁服务总开关" description="关闭后不再注入、不再强制帧率，游戏会回到自身的帧率档位" checked={config.masterEnabled} onChange={(value) => updateConfig('masterEnabled', value)} />
+        <ToggleRow title="开机自启动" description="登录 Windows 后自动启动，在后台等待游戏运行" checked={config.autoStartWithWindows} onChange={(value) => updateConfig('autoStartWithWindows', value)} />
+        <ToggleRow title="启动时自动以管理员权限运行" description="登录自启改由最高权限计划任务启动（不弹 UAC）；手动启动会请求一次 UAC" checked={config.autoStartAsAdministrator} onChange={(value) => updateConfig('autoStartAsAdministrator', value)} />
+        {config.autoStartWithWindows && autostartNotice && <p className={`settings-small-note${autostart.notice ? ' is-warning' : ''}`}><ShieldCheck size={14} />{autostartNotice}</p>}
+        <ToggleRow title="启动后最小化到托盘" description="开启：启动、最小化和关闭都驻留托盘；关闭：启动显示窗口，最小化到任务栏，关闭窗口退出程序" checked={config.startMinimized} onChange={(value) => updateConfig('startMinimized', value)} />
+        <ToggleRow title="启动时显示用户协议" description="每次手动启动时展示用户协议与安全声明" checked={config.showSafetyNoticeOnStartup} onChange={(value) => updateConfig('showSafetyNoticeOnStartup', value)} />
+        <ToggleRow title="自动检查更新" description="启动后从项目官方 GitHub Releases 检查新版本；也可随时在关于页或托盘菜单手动检查" checked={config.autoCheckUpdate} onChange={(value) => updateConfig('autoCheckUpdate', value)} />
+        {isNative && <ToggleRow title="隐藏管理员权限提醒" description="关闭后，概览页不再显示「以管理员重新启动」提示条" checked={config.suppressAdminHint} onChange={(value) => updateConfig('suppressAdminHint', value)} />}
+        {isNative && (
+          <div className="setting-row admin-setting-row">
+            <div>
+              <span className="row-title">运行权限</span>
+              <p>{isElevated
+                ? '当前已以管理员身份运行，可向游戏进程注入解锁模块。'
+                : '标准用户下注入可能失败，可一键提权重启（仅本次会话弹一次 UAC）。登录自启走哪种权限见上方两个开关。'}</p>
+            </div>
+            {isElevated
+              ? <span className="admin-pill is-on"><ShieldCheck size={14} />管理员</span>
+              : <button type="button" className="button button-secondary" disabled={busy || elevating} onClick={onRestartElevated}>
+                  {elevating ? <LoaderCircle size={15} className="spin" /> : <Shield size={15} />}
+                  {elevating ? '请求中…' : '以管理员重新启动'}
+                </button>}
+          </div>
+        )}
+      </section>}
+      {tab === 'advanced' && <>
+        <section className="control-panel setting-list"><div className="section-intro"><h2>后台与诊断</h2><p>默认值适用于日常使用，仅在需要时调整。</p></div>
+          <ToggleRow title="调试日志" description="在桌面版中记录详细诊断信息，帮助排查运行问题" checked={config.debugLogging} onChange={(value) => updateConfig('debugLogging', value)} />
+          <div className="setting-row"><div><label className="row-title" htmlFor="log-level-setting">最低日志级别</label><p>{isNative ? '过滤写入磁盘日志文件的最低级别' : '此偏好用于桌面日志；网页会话日志始终保留交互记录'}</p></div><select id="log-level-setting" className="select-input" value={config.logLevel} onChange={(event) => updateConfig('logLevel', event.target.value as LogLevel)}>{['Trace', 'Debug', 'Info', 'Warn', 'Error'].map((level) => <option key={level}>{level}</option>)}</select></div>
+          <NumberSetting title="日志保留时间" description="桌面版自动清理超过保留时间的日志，范围 1 - 90 天" min={1} max={90} unit="天" value={config.logRetainDays} onChange={(value) => updateConfig('logRetainDays', value)} />
+        </section>
+          <section className="control-panel config-tools"><div className="section-intro"><h2>配置管理</h2><p>导入 / 导出包含两个游戏各自的配置，可在不同设备间迁移。</p></div><div className="config-tool-buttons"><button className="button button-secondary" onClick={onImport} disabled={busy}><Upload size={16} />导入配置</button><button className="button button-secondary" onClick={onExport}><Download size={16} />导出配置</button><button className="button button-quiet reset-button" onClick={onReset} disabled={busy}><RotateCcw size={15} />恢复默认</button></div><p className="input-help">{busy ? '请稍候再导入或恢复配置。导出仍可正常使用。' : isNative ? '导出时选择保存目录，文件名固定为 config.json；导入/导出与该文件字段兼容。' : '导出为原项目兼容的 config.json。'}</p></section>
+        {isNative && onUninstall && (
+          <section className="control-panel config-tools uninstall-panel"><div className="section-intro"><h2>卸载</h2><p>调用安装器（Kachina）的卸载向导：清理程序文件、桌面与开始菜单快捷方式、开机自启动（注册表项与管理员计划任务），以及「安装的应用」中的卸载登记。</p></div><div className="config-tool-buttons"><button className="button button-danger" onClick={onUninstall} disabled={busy}><Trash2 size={16} />卸载本软件</button></div><p className="input-help">卸载向导中可选择是否同时删除配置与日志（用户数据目录）。安装器会自行申请管理员权限。</p></section>
+        )}
+      </>}
+      {isNative
+        ? <div className="settings-native-note"><Info size={16} /><p>当前已连接桌面服务。配置写入用户数据目录下的 config.json；自启、托盘与注入由宿主进程管理。需要卸载时，使用「高级设置 → 卸载」中的按钮，或在 Windows「设置 → 应用 → 安装的应用」中卸载（两者都会调用安装目录下的卸载程序）。</p></div>
+        : <div className="settings-native-note"><Info size={16} /><p>当前为网页预览，所有更改保存在此浏览器中。Windows 自启、托盘与进程检测等系统功能，需要连接桌面服务后生效。</p></div>}
+    </div>
+  </>;
+}

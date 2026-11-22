@@ -1,0 +1,399 @@
+# devcheck 各层实现（被 devcheck.ps1 dot-source）
+#
+# 每个 Test-* 函数对应一个层：返回字符串 = 通过的说明，抛异常 = 失败。
+# 依赖 devcheck.ps1 的 $RepoRoot / $DevCheckRoot / $KachinaSrc 与 lib/Common.ps1 的助手函数。
+
+function Test-KiraraBoundary {
+    # 安装器工具链（上游 kachina-installer 源码快照 + 本地补丁 + kirara-builder）
+    # 已拆到独立项目 Kirara。本仓库只保留 packaging/ 下的安装包配置与打包脚本，
+    # 因此这里守住三件事：
+    #   1) 本仓库不再内嵌 kachina 源码，也不是 submodule；
+    #   2) 工作流 / 打包脚本除了从 Kirara 最新 Release 下载 kirara-builder.exe，
+    #      没有其它从外部拉源码、下二进制的动作；
+    #   3) CI 确实从 Kirara 最新 Release 取 builder，打包只用这个产物。
+    $notes = [System.Collections.Generic.List[string]]::new()
+
+    # 1) 本仓库不许再出现 kachina 源码
+    if (Test-Path -LiteralPath (Join-Path $RepoRoot '.gitmodules')) {
+        throw '存在 .gitmodules —— 安装器工具链必须在独立项目 Kirara，不能以 submodule 拉回来'
+    }
+    foreach ($stale in @('packaging/kachina', 'kachina', 'packaging/build-kachina.ps1',
+                         'installer/kachina', 'installer/build-kachina.ps1')) {
+        if (Test-Path -LiteralPath (Join-Path $RepoRoot $stale)) {
+            throw "$stale 又出现在本仓库 —— kachina 源码与 builder 构建脚本属于 Kirara"
+        }
+    }
+    $notes.Add('无内嵌 kachina 源码 / 非 submodule')
+
+    # 2) 工作流与打包脚本里除 Kirara Release 下载外，不许出现其它
+    #    「从外部拉源码 / 下二进制」的动作。
+    #    只扫可执行内容：注释行（# 开头）跳过，避免误伤说明性文字
+    $scan = @(Get-ChildItem -LiteralPath (Join-Path $RepoRoot '.github/workflows') -Filter '*.yml' -File)
+    $scan += @(Get-ChildItem -LiteralPath (Join-Path $RepoRoot 'packaging') -Filter '*.ps1' -File)
+    $rootBuild = Join-Path $RepoRoot 'build.ps1'
+    if (Test-Path -LiteralPath $rootBuild) { $scan += @(Get-Item -LiteralPath $rootBuild) }
+
+    $badPatterns = @(
+        'YuehaiTeam', 'kachina-installer\.git', 'releases/download', 'release-downloader',
+        'git\s+clone', 'git\s+submodule', 'Invoke-WebRequest', 'Invoke-RestMethod',
+        'DownloadFile', 'curl\s', 'wget\s'
+    )
+    $inBlockComment = $false
+    foreach ($f in $scan) {
+        $lineNo = 0
+        foreach ($line in [System.IO.File]::ReadLines($f.FullName)) {
+            $lineNo++
+            $t = $line.Trim()
+            if ($t -match '^<#' -or $inBlockComment) {
+                $inBlockComment = -not ($t -match '#>')
+                continue
+            }
+            if ($t.StartsWith('#')) { continue }
+            foreach ($pat in $badPatterns) {
+                if ($t -match $pat) {
+                    throw "$($f.Name):$lineNo 出现从外部拉取的语句 [$pat]: $t"
+                }
+            }
+        }
+    }
+    $notes.Add("$($scan.Count) 个工作流/脚本无外部拉取")
+
+    # 3) build.yml 必须从 Kirara 最新 Release 下载 kirara-builder.exe
+    $buildYml = [System.IO.File]::ReadAllText((Join-Path $RepoRoot '.github/workflows/build.yml'))
+    if ($buildYml -notmatch 'gh\s+release\s+download') {
+        throw 'build.yml 没有用 gh release download 拉取 kirara-builder —— 只允许直接使用 Kirara 已发布的构建产物'
+    }
+    if ($buildYml -notmatch '--repo\s+bainian-gudu/Kirara') {
+        throw 'build.yml 下载 builder 时没有指定 bainian-gudu/Kirara —— 安装器工具链只能来自该仓库'
+    }
+    if ($buildYml -notmatch '--pattern\s+["'']?kirara-builder\.exe') {
+        throw 'build.yml 下载的不是 kirara-builder.exe'
+    }
+    if ($buildYml -match 'repository:\s*bainian-gudu/Kirara' -or $buildYml -match 'kirara/build\.ps1') {
+        throw 'build.yml 又在检出 / 编译 Kirara 源码 —— 只允许直接下载最新 Release 产物'
+    }
+    $notes.Add('CI 从 Kirara 最新 Release 下载 builder')
+
+    # 4) 打包脚本只认 Kirara 的产物（或显式指定的 builder）
+    $pack = [System.IO.File]::ReadAllText((Join-Path $RepoRoot 'packaging/pack.ps1'))
+    foreach ($needle in @('$KiraraRepo', 'build.ps1', '$BuilderPath')) {
+        if ($pack -notmatch [regex]::Escape($needle)) {
+            throw "packaging/pack.ps1 里找不到 $needle —— 打包脚本必须只从 Kirara 取 kirara-builder"
+        }
+    }
+    # -BuilderPath 给的是现成产物，必须就此跳过 Kirara 目录查找：
+    # CI 的 pack job 里没有 Kirara 检出，多查一次就会直接失败（真踩过）。
+    if ($pack -notmatch '(?m)^\s*if\s*\(\s*\$BuilderPath\s*\)\s*\{\s*\$SkipBuilderBuild\s*=\s*\$true\s*\}') {
+        throw 'packaging/pack.ps1 给了 -BuilderPath 仍会去 Kirara 目录找 build.ps1 —— 与 .PARAMETER BuilderPath 的约定不符'
+    }
+    # 打包中途会 Push-Location 到 out\pack：builder 路径必须提前固化成绝对路径，
+    # 否则 CI 传进来的相对路径在 gen 步骤会被 PowerShell 当成模块名（真踩过）。
+    if ($pack -notmatch '(?m)^\s*\$Builder\s*=\s*Get-AbsolutePath\s+\$Builder\s*$') {
+        throw 'packaging/pack.ps1 没有把 $Builder 固化成绝对路径 —— Push-Location 之后相对路径会失效'
+    }
+    $notes.Add('打包脚本只从 Kirara 取 builder')
+
+    # 5) 便携包和安装器必须继续作为 CI 产物上传；否则会出现“打包成功但用户拿不到”
+    foreach ($artifact in @('artifacts/*.zip', 'artifacts/*.7z', 'artifacts/*.Install.*.exe')) {
+        if ($buildYml -notmatch [regex]::Escape($artifact)) {
+            throw "build.yml 没有上传 $artifact —— 便携包 / 安装器产物不能从发布链路消失"
+        }
+    }
+    $notes.Add('CI 上传安装器与便携包产物')
+
+    return ($notes -join '；')
+}
+
+function Test-PackagingProfile {
+    # packaging/packaging.config.json 是「应用侧」的唯一事实来源：安装目录、ARP 名称、
+    # 旧品牌兼容名、卸载时要清理的注册表 / 计划任务 / 快捷方式 / 用户数据目录。
+    # 安装器工具链（Kirara）只读它，所以「改了宿主却忘了改配置」只能在这里发现 ——
+    # 每一项都拿宿主源码里的常量交叉断言，而不是在检查里再抄一遍字面量。
+    $cfgPath = Join-Path $RepoRoot 'packaging/packaging.config.json'
+    if (-not (Test-Path -LiteralPath $cfgPath)) { throw "缺少 $cfgPath" }
+    $cfg = Get-Content -LiteralPath $cfgPath -Raw | ConvertFrom-Json
+
+    # 宿主源码里的常量：唯一事实来源。有些常量是表达式（ProductName + ".exe"），
+    # 所以这里解析后递归求值，而不是只认字面量。
+    $script:HostConstCache = @{}
+    function Get-HostConst([string]$file, [string]$name) {
+        $key = "$file|$name"
+        if ($script:HostConstCache.ContainsKey($key)) { return $script:HostConstCache[$key] }
+        $text = [System.IO.File]::ReadAllText((Join-Path $RepoRoot $file))
+        $m = [regex]::Match($text, "const\s+string\s+$name\s*=\s*([^;]+);")
+        if (-not $m.Success) { throw "在 $file 里找不到常量 $name（宿主改了命名？）" }
+        $expr = $m.Groups[1].Value.Trim()
+        $value = $null
+        if ($expr -match '^"([^"]*)"$') {
+            $value = $Matches[1]
+        }
+        elseif ($expr -match '^([A-Za-z_]\w*)$') {
+            $value = Get-HostConst $file $Matches[1]
+        }
+        elseif ($expr -match '^([A-Za-z_]\w*)\s*\+\s*"([^"]*)"$') {
+            $value = (Get-HostConst $file $Matches[1]) + $Matches[2]
+        }
+        if ($null -eq $value) { throw "无法解析 $file 里的常量 $name：$expr" }
+        $script:HostConstCache[$key] = $value
+        return $value
+    }
+    $productName = Get-HostConst 'src/Core/AppPaths.cs' 'ProductName'         # 内部产品标识
+    $displayName = Get-HostConst 'src/Core/AppPaths.cs' 'ProductDisplayName'  # 用户可见品牌名
+    $exeName = Get-HostConst 'src/Core/AppPaths.cs' 'ExecutableFileName'
+    $uninstName = Get-HostConst 'src/Core/AppPaths.cs' 'UninstallerFileName'
+    $updaterName = Get-HostConst 'src/Core/AppPaths.cs' 'UpdaterFileName'
+    $taskName = Get-HostConst 'src/Core/Autostart.cs' 'ElevatedTaskName'
+
+    $bad = [System.Collections.Generic.List[string]]::new()
+    function Want([string]$what, [bool]$ok, [string]$detail) {
+        if (-not $ok) { $bad.Add("$what（$detail）") }
+    }
+    function HasValue($list, [string]$value) {
+        return @($list) -contains $value
+    }
+
+    # 1) 品牌名 / 可执行文件 / 安装目录
+    Want 'appName 与宿主 ProductDisplayName 一致' ($cfg.appName -eq $displayName) "$($cfg.appName) vs $displayName"
+    Want 'exeName 与宿主 ExecutableFileName 一致' ($cfg.exeName -eq $exeName) "$($cfg.exeName) vs $exeName"
+    Want 'programFilesPath 与品牌名一致' ($cfg.programFilesPath -eq $displayName) "$($cfg.programFilesPath)"
+    Want 'shortcutName 与品牌名一致' ($cfg.shortcutName -eq $displayName) "$($cfg.shortcutName)"
+    Want 'title 与品牌名一致' ($cfg.title -eq $displayName) "$($cfg.title)"
+    Want 'uninstallName 与宿主 UninstallerFileName 一致' ($cfg.uninstallName -eq $uninstName) "$($cfg.uninstallName) vs $uninstName"
+    Want 'updaterName 与宿主 UpdaterFileName 一致' ($cfg.updaterName -eq $updaterName) "$($cfg.updaterName) vs $updaterName"
+
+    # 2) 内部标识与卸载路径使用当前产品名
+    Want 'regName 与宿主 ProductName 一致' ($cfg.regName -eq $productName) "$($cfg.regName) vs $productName"
+    Want 'extraUninstallPath 覆盖当前更新器' (@($cfg.extraUninstallPath) -contains "`${INSTALL_PATH}/$($cfg.updaterName)") "$($cfg.extraUninstallPath -join ' | ')"
+
+    # 3) 卸载回收：宿主写的自启动项 / 计划任务 / 快捷方式
+    $runEntry = @($cfg.extraUninstallRegistry) | Where-Object {
+        $_.hive -eq 'HKCU' -and $_.key -eq 'Software\Microsoft\Windows\CurrentVersion\Run' -and $_.value -eq $productName
+    }
+    Want 'extraUninstallRegistry 回收宿主写的 HKCU Run 值' ($runEntry.Count -eq 1) "value=$productName"
+    Want 'extraUninstallScheduledTasks 登记宿主那个计划任务名' (HasValue $cfg.extraUninstallScheduledTasks $taskName) "$($cfg.extraUninstallScheduledTasks -join ',') vs $taskName"
+    foreach ($lnk in @("$displayName.lnk", "Uninstall $displayName.lnk")) {
+        Want "extraUninstallLnkNames 覆盖 $lnk" (HasValue $cfg.extraUninstallLnkNames $lnk) "$($cfg.extraUninstallLnkNames -join ',')"
+    }
+
+    # 4) 用户数据目录：宿主的三条回退链都要被卸载器覆盖，且都是「%VAR%/…/产品名」形状
+    $dataPaths = @($cfg.userDataPath)
+    Want 'userDataPath 非空' ($dataPaths.Count -gt 0) ''
+    foreach ($entry in $dataPaths) {
+        $t = "$entry".TrimEnd('/', '\')
+        $ok = $t.StartsWith('%') -and $t.EndsWith($productName) -and ($t.Split([char[]]@('/', '\')).Count -ge 2)
+        Want "userDataPath 形状合法：$entry" $ok '需要 %VAR%/…/产品名，不能是容器本身'
+    }
+    foreach ($var in @('%LOCALAPPDATA%', '%APPDATA%', '%USERPROFILE%/Documents')) {
+        $hit = $dataPaths | Where-Object { "$_" -like "$var/*" }
+        Want "userDataPath 覆盖宿主回退目录 $var" ($null -ne $hit) "$($dataPaths -join ' | ')"
+    }
+
+    # 5) 协议正文与更新源
+    $agreement = Join-Path (Split-Path -Parent $cfgPath) $cfg.agreementFile
+    $agreementOk = (Test-Path -LiteralPath $agreement) -and ((Get-Item -LiteralPath $agreement).Length -gt 100)
+    Want 'agreementFile 指向的协议正文存在且非空' $agreementOk "$agreement"
+    Want 'agreementFormat 为 text' ($cfg.agreementFormat -eq 'text') "$($cfg.agreementFormat)"
+    Want 'agreementTitle 非空' (-not [string]::IsNullOrWhiteSpace($cfg.agreementTitle)) "$($cfg.agreementTitle)"
+    # GitHub Latest 返回的 tag 带 v 前缀，Release 文件名不带；用 versionRegex
+    # 只提取数字版本号，路径与文件名才能同时命中。
+    $expectedUri = "bainian-gudu/HoYoEnhance/releases/download/v`${version}/$($cfg.appName).Install.`${version}.exe"
+    $uri = "$(@($cfg.source)[0].uri)"
+    $uriParts = $uri -split '#', 2
+    Want 'source 指向本仓库的 Release 安装包' ($uriParts[0] -like "*$expectedUri") "$uri"
+    Want 'source 用 versionRegex 去掉 tag 的 v 前缀' ($uriParts.Count -eq 2 -and $uriParts[1] -eq 'versionRegex=/tag/v?([0-9.]%2B)') "$uri"
+
+    # 6) 安装界面左栏图与安装器图标：两个路径都由配置点名，相对配置文件所在目录解析。
+    #    打包期读不到只会退回 Kirara 的内置资源，安装器里看不出区别，所以先在这里拦住。
+    $cfgDir = Split-Path -Parent $cfgPath
+    foreach ($spec in @(
+            @{ Key = 'imageFile'; What = '左栏图'; Ext = '.webp' }
+            @{ Key = 'iconFile'; What = '安装器图标'; Ext = '.ico' })) {
+        $rel = "$($cfg.($spec.Key))"
+        if ([string]::IsNullOrWhiteSpace($rel)) {
+            Want "$($spec.Key) 已配置（$($spec.What)）" $false '未配置会退回 Kirara 内置资源'
+            continue
+        }
+        Want "$($spec.Key) 扩展名为 $($spec.Ext)" ($rel.EndsWith($spec.Ext)) "$rel"
+        $full = Join-Path $cfgDir $rel
+        $exists = Test-Path -LiteralPath $full -PathType Leaf
+        Want "$($spec.Key) 指向的文件存在：$rel" $exists "$full"
+        if (-not $exists) { continue }
+        $bytes = [System.IO.File]::ReadAllBytes($full)
+        # Kirara 按内容而不是扩展名认图片：只有 RIFF....WEBP 当图片，其它内容按 CSS 主题注入。
+        $isWebp = ($bytes.Length -ge 12) -and ([System.Text.Encoding]::ASCII.GetString($bytes, 0, 4) -eq 'RIFF') -and ([System.Text.Encoding]::ASCII.GetString($bytes, 8, 4) -eq 'WEBP')
+        $isIco = ($bytes.Length -ge 6) -and ($bytes[0] -eq 0) -and ($bytes[1] -eq 0) -and ($bytes[2] -eq 1) -and ($bytes[3] -eq 0)
+        if ($spec.Key -eq 'imageFile') {
+            Want 'imageFile 是 WebP（否则会被当成 CSS 主题注入）' $isWebp "$rel"
+        }
+        else {
+            Want 'iconFile 是 ICO（rcedit 只认 ICO）' $isIco "$rel"
+        }
+    }
+    # 三步 pack 共用同一份配置；改用命令行参数会覆盖配置，漏传一步就得到资源不一致的 exe。
+    $packScriptText = [System.IO.File]::ReadAllText((Join-Path $RepoRoot 'packaging/pack.ps1'))
+    Want 'pack.ps1 不传 --image / --icon（界面资源随配置走）' `
+        (-not ($packScriptText.Contains('--image') -or $packScriptText.Contains('--icon'))) `
+        '命令行参数会覆盖配置'
+
+    # 7) 运行库与提权策略
+    Want 'runtimes 含 .NET Desktop Runtime 9' (@($cfg.runtimes) -contains 'Microsoft.DotNet.DesktopRuntime.9') "$($cfg.runtimes -join ',')"
+    Want 'runtimes 含 VCRedist' (@($cfg.runtimes) -contains 'Microsoft.VCRedist.2015+.x64') "$($cfg.runtimes -join ',')"
+    Want 'uacStrategy 为 prefer-admin' ($cfg.uacStrategy -eq 'prefer-admin') "$($cfg.uacStrategy)"
+
+    # 8) 兼容表面：运行库前置、便携包、数据目录回退都必须仍在接线中
+    $programPath = Join-Path $RepoRoot 'src/Host/Program.cs'
+    $programText = [System.IO.File]::ReadAllText($programPath)
+    Want 'Program 调用 RuntimePrerequisite.EnsureOrPrompt' `
+        ($programText -match 'RuntimePrerequisite\.EnsureOrPrompt\s*\(') `
+        '缺失会导致启动时不检查运行库'
+    $runtimePath = Join-Path $RepoRoot 'src/Host/RuntimePrerequisite.cs'
+    Want 'RuntimePrerequisite.cs 存在' (Test-Path -LiteralPath $runtimePath) "$runtimePath"
+
+    $appPathsText = [System.IO.File]::ReadAllText((Join-Path $RepoRoot 'src/Core/AppPaths.cs'))
+    foreach ($marker in @('Environment.SpecialFolder.LocalApplicationData',
+                          'Environment.SpecialFolder.ApplicationData',
+                          'Environment.SpecialFolder.MyDocuments')) {
+        Want "AppPaths 保留数据目录回退 $marker" ($appPathsText.Contains($marker)) '缺少任一层都会退回单目录行为'
+    }
+
+    $packText = [System.IO.File]::ReadAllText((Join-Path $RepoRoot 'packaging/pack.ps1'))
+    Want 'pack.ps1 仍生成便携 zip' ($packText -match 'Compress-Archive') '便携 zip 分支缺失'
+    Want 'pack.ps1 仍生成便携 7z' ($packText -match '-t7z') '便携 7z 分支缺失'
+
+    if ($bad.Count) {
+        throw "安装包配置与宿主源码不一致（$($bad.Count) 项）：`n   - " + ($bad -join "`n   - ")
+    }
+    return "配置与宿主一致：$displayName / regName=$productName / 任务=$taskName / 数据目录 $($dataPaths.Count) 条"
+}
+
+function Test-Ps1Syntax {
+    $files = @(Get-ChildItem -Path $RepoRoot -Recurse -Filter '*.ps1' -File |
+        Where-Object { $_.FullName -notmatch '[\\/](node_modules|target|dist|bin|obj|gen|\.git)[\\/]' })
+    $bad = 0
+    foreach ($f in $files) {
+        $tokens = $null; $errs = $null
+        [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tokens, [ref]$errs) | Out-Null
+        if ($errs -and $errs.Count) {
+            $bad++
+            Write-Bad $f.FullName.Substring($RepoRoot.Length + 1)
+            foreach ($e in $errs) { Write-Bad "   line $($e.Extent.StartLineNumber): $($e.Message)" }
+        }
+    }
+    if ($bad) { throw "$bad / $($files.Count) 个 .ps1 有语法错误" }
+    return "$($files.Count) 个 .ps1 语法通过"
+}
+
+function Test-Host {
+    $dotnet = Get-Tool 'dotnet'
+    if (-not $dotnet) { Skip-Layer 'dotnet 不在 PATH（.NET 9 SDK）' }
+    $proj = Join-Path $RepoRoot 'src/Host/GenshinFpsUnlocker.Host.csproj'
+    if (-not (Test-Path -LiteralPath $proj)) { throw "找不到 $proj" }
+    $coreProj = Join-Path $RepoRoot 'src/Core/HoYoEnhance.Core.csproj'
+    if (-not (Test-Path -LiteralPath $coreProj)) { throw "找不到 $coreProj" }
+    $hostProject = [System.IO.File]::ReadAllText($proj)
+    if ($hostProject -notmatch 'HoYoEnhance\.Core\.csproj') {
+        throw 'Host 工程没有引用 HoYoEnhance.Core'
+    }
+    $coreProject = [System.IO.File]::ReadAllText($coreProj)
+    if ($coreProject -match 'UseWindowsForms|Microsoft\.Web\.WebView2|CommunityToolkit') {
+        throw 'Core 工程引用了 WinForms / WebView2 / Toast 依赖'
+    }
+    $forbidden = Get-ChildItem (Join-Path $RepoRoot 'src/Core') -Filter '*.cs' |
+        Select-String -Pattern 'System\.Windows\.Forms|Microsoft\.Web\.WebView2|CommunityToolkit|IWin32Window' |
+        Select-Object -First 1
+    if ($forbidden) {
+        throw "Core 源码引用了 UI 类型：$($forbidden.Path):$($forbidden.LineNumber)"
+    }
+    $r = Invoke-Native -FilePath $dotnet `
+        -Arguments @('build', $proj, '-c', 'Release', '-p:EnableWindowsTargeting=true', '--nologo', '-v', 'q') `
+        -WorkingDirectory $RepoRoot -Tail 30
+    if ($r.ExitCode -ne 0) { throw 'dotnet build 失败' }
+    $warnLine = ($r.Output -split "`r?`n" | Where-Object { $_ -match 'Warning' } | Select-Object -First 1)
+    if ($warnLine) { return $warnLine.Trim() }
+    return 'Host/Core 构建通过，Core 无 WinForms / WebView2 依赖'
+}
+
+function Test-Contracts {
+    $dotnet = Get-Tool 'dotnet'
+    if (-not $dotnet) { Skip-Layer 'dotnet 不在 PATH（.NET 9 SDK）' }
+    $proj = Join-Path $RepoRoot 'tools/contract-gen/HoYoEnhance.ContractGen.csproj'
+    if (-not (Test-Path -LiteralPath $proj)) { throw "找不到 $proj" }
+    $out = Join-Path $RepoRoot 'src/Ui/src/lib/bridge.generated.ts'
+    $r = Invoke-Native -FilePath $dotnet `
+        -Arguments @('run', '--project', $proj, '--no-launch-profile', '--', '--check', '--out', $out) `
+        -WorkingDirectory $RepoRoot -Tail 30
+    if ($r.ExitCode -ne 0) { throw 'C# DTO 与 TypeScript 契约不一致' }
+    return 'C# DTO 与 TypeScript 契约一致'
+}
+
+function Test-VersionSync {
+    # 版本号唯一来源是仓库根 VERSION；app.manifest / USER_AGREEMENT.txt /
+    # version.generated.ts 都是它的派生文件。这里用生成脚本的 -Check 模式拦住漂移：
+    # 改了 VERSION 却没同步派生文件，或派生文件被手改，都会在这里失败。
+    $script = Join-Path $RepoRoot 'tools/version/sync-version.ps1'
+    if (-not (Test-Path -LiteralPath $script)) { throw "缺少 $script" }
+    $versionFile = Join-Path $RepoRoot 'VERSION'
+    if (-not (Test-Path -LiteralPath $versionFile)) { throw "缺少版本文件 $versionFile" }
+    $pwsh = Get-Tool 'pwsh'
+    if (-not $pwsh) { Skip-Layer 'pwsh 不在 PATH' }
+    $r = Invoke-Native -FilePath $pwsh `
+        -Arguments @('-NoProfile', '-File', $script, '-Check') `
+        -WorkingDirectory $RepoRoot -Tail 30
+    if ($r.ExitCode -ne 0) { throw '版本号派生文件与 VERSION 不一致' }
+    $version = (Get-Content -LiteralPath $versionFile -Raw).Trim()
+    return "版本号单一来源 VERSION=$version，派生文件一致"
+}
+
+function Test-HostTest {
+    $dotnet = Get-Tool 'dotnet'
+    if (-not $dotnet) { Skip-Layer 'dotnet 不在 PATH（.NET 9 SDK）' }
+    $proj = Join-Path $DevCheckRoot 'hosttest/Harness.csproj'
+    if (-not (Test-Path -LiteralPath $proj)) { throw "找不到 $proj" }
+
+    # 测试台引用的是托管宿主（WinExe + WinForms），任何平台都能编，
+    # 但只有 Windows 装得了 Microsoft.WindowsDesktop.App 运行时、跑得起来。
+    # 输出目录由 SDK 推导（RID / TargetFramework 因机器而异），这里直接问 MSBuild 要，
+    # 不猜路径：Windows runner 上曾有 TFM 目录与 RID 子目录两种布局。
+    $buildArgs = @('build', $proj, '-c', 'Debug', '-p:EnableWindowsTargeting=true', '--nologo', '-v', 'q')
+    $r = Invoke-Native -FilePath $dotnet -Arguments $buildArgs -WorkingDirectory $RepoRoot -Tail 20
+    if ($r.ExitCode -ne 0) { throw '测试台编译失败' }
+
+    $r = Invoke-Native -FilePath $dotnet `
+        -Arguments @('msbuild', $proj, '-p:Configuration=Debug', '-p:EnableWindowsTargeting=true', '-getProperty:TargetPath') `
+        -WorkingDirectory $RepoRoot -Tail 5
+    if ($r.ExitCode -ne 0) { throw '取不到测试台输出路径（dotnet msbuild -getProperty:TargetPath）' }
+    $dll = ($r.Output -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -Last 1).Trim()
+    if (-not $dll) { throw 'dotnet msbuild 没有返回 TargetPath' }
+
+    if (-not $script:IsWin) {
+        Skip-Layer "非 Windows：测试台依赖 WindowsDesktop 运行时，这里只验证它能编过（断言交给 windows-latest）：$dll"
+    }
+
+    if (-not (Test-Path -LiteralPath $dll)) { throw "测试台没有产出 $dll" }
+    $r = Invoke-Native -FilePath $dotnet -Arguments @($dll) -WorkingDirectory (Split-Path -Parent $dll) -Tail 40
+
+    # 退出码之外再抓一行汇总：测试进程被运行时错误打断时，行号/原因是唯一线索。
+    $summary = ($r.Output -split "`r?`n" | Where-Object { $_ -match '====' } | Select-Object -Last 1)
+    if ($r.ExitCode -ne 0) {
+        if (-not $summary) { $summary = "退出码 $($r.ExitCode)" }
+        throw "Host 行为断言失败：$summary"
+    }
+    if (-not $summary) { $summary = '断言全部通过' }
+    return $summary.Trim()
+}
+
+function Test-Ui {
+    $npm = Get-Tool 'npm'
+    if (-not $npm) { Skip-Layer 'npm 不在 PATH' }
+    $ui = Join-Path $RepoRoot 'src/Ui'
+    if (-not (Test-Path (Join-Path $ui 'node_modules'))) {
+        Skip-Layer 'src/Ui/node_modules 不存在（先 cd src/Ui && npm install）'
+    }
+    $r = Invoke-Native -FilePath $npm -Arguments @('run', 'lint') -WorkingDirectory $ui -Tail 30
+    if ($r.ExitCode -ne 0) { throw 'src/Ui eslint 失败' }
+    $r = Invoke-Native -FilePath $npm -Arguments @('run', 'test') -WorkingDirectory $ui -Tail 30
+    if ($r.ExitCode -ne 0) { throw 'src/Ui 单元测试失败' }
+    $r = Invoke-Native -FilePath $npm -Arguments @('run', 'build') -WorkingDirectory $ui -Tail 30
+    if ($r.ExitCode -ne 0) { throw 'src/Ui 构建失败' }
+    return 'src/Ui eslint / vitest / vite build 通过'
+}

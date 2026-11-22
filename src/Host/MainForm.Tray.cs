@@ -1,0 +1,406 @@
+namespace GenshinFpsUnlocker.Host;
+
+/// <summary>
+/// 系统托盘：精简右键菜单，按「当前游戏 → 窗口与游戏操作 → 帧率解锁组 →
+/// 画面效果组 → 退出」的顺序排列；外观跟随 Web UI 深浅色，避免系统默认灰白菜单。
+/// 菜单里的开关一律作用于「当前游戏」，切换游戏后文案与勾选跟着换。
+/// </summary>
+internal sealed partial class MainForm
+{
+    /// <summary>与 Web UI FpsControl 预设一致（仅自定义帧率的游戏使用）。</summary>
+    private static readonly int[] TrayFpsPresets = [60, 90, 120, 144, 165, 240];
+
+    private ToolStripMenuItem? _trayStatusItem;
+    private ToolStripMenuItem? _trayGameRoot;
+    private ToolStripMenuItem? _trayGameGenshinItem;
+    private ToolStripMenuItem? _trayGameStarRailItem;
+    private ToolStripMenuItem? _trayLaunchItem;
+    private ToolStripMenuItem? _trayEnabledItem;
+    private ToolStripMenuItem? _trayAntiBlurPerspectiveItem;
+    private ToolStripMenuItem? _trayAntiBlurDiveMosaicItem;
+    private ToolStripMenuItem? _trayAntiBlurDofItem;
+    private ToolStripMenuItem? _trayHideUidItem;
+    private ToolStripMenuItem? _trayFpsRoot;
+    private ContextMenuStrip? _trayMenu;
+    private Icon? _trayIconOwned;
+    private bool _trayTipShownThisSession;
+    /// <summary>帧率子菜单当前是按哪款游戏构建的（切换游戏时要重建）。</summary>
+    private GameId? _trayFpsBuiltFor;
+    /// <summary>托盘自动跟随的纯状态机（启动跟随一次、退出回退，手动查看不打断回退）。</summary>
+    private readonly TrayGameFollowState _trayFollow = new();
+    /// <summary>退出确认定时器：运行状态短暂抖动时不立即回退。</summary>
+    private System.Windows.Forms.Timer? _trayFollowExitTimer;
+    /// <summary>主窗是否已藏入托盘（气泡/提示文案用）。</summary>
+    private bool _inTray;
+
+    /// <summary>当前正在配置的游戏描述与档案。</summary>
+    private GameDescriptor ActiveGameDescriptor => GameCatalog.Get(_service.DisplayGame);
+    private GameProfile ActiveGameProfile => _config.Profile(_service.DisplayGame);
+
+    /// <summary>
+    /// 「仅供单机体验」提醒只对原神显示：千星奇域（UGC）是原神专属玩法，
+    /// 星穹铁道没有对应模式，文案里不出现。
+    /// </summary>
+    private static string SoloOnlyNotice(GameDescriptor descriptor) =>
+        descriptor.Id == GameId.StarRail ? string.Empty : "（仅供单机体验）";
+
+    private void OnServiceStateForTray()
+    {
+        if (IsDisposed) return;
+        try
+        {
+            if (IsHandleCreated)
+                BeginInvoke(() =>
+                {
+                    SyncTrayGameFollow();
+                    UpdateTrayTip();
+                });
+            else
+            {
+                SyncTrayGameFollow();
+                UpdateTrayTip();
+            }
+        }
+        catch { /* ignore */ }
+    }
+
+    /// <summary>
+    /// 托盘热切换：游戏进程启动的那一下自动切到它（菜单、提示、界面一起换），
+    /// 所有游戏退出后由状态机统一回到目录定义的默认页。切页策略只认运行会话号，
+    /// 运行状态的短暂抖动不会重复触发、也不会误触发退出回退；
+    /// 不论启动前或运行期间切换过哪一页，游戏退出后的默认页保持一致。
+    /// 跟随只改展示游戏（<see cref="UnlockService.DisplayGame"/>），不覆盖用户选择。
+    /// </summary>
+    private void SyncTrayGameFollow()
+    {
+        if (IsDisposed) return;
+
+        // 运行状态用「正在运行的游戏 → 已附着的游戏」兜底：监视循环短暂读不到
+        // 进程但 Stub 仍附着时，不能误判游戏退出并触发页面回退。
+        var running = _service.RunningGame ?? _service.AttachedGame;
+        var decision = _trayFollow.Update(
+            _service.RunningSession, running, _service.DisplayGame);
+        if (decision.NeedsExitConfirm)
+        {
+            ScheduleTrayFollowExitConfirm();
+            return;
+        }
+        if (!decision.Switch) return;
+
+        ApplyTrayFollowDecision(decision);
+    }
+
+    /// <summary>运行状态刚变为空：延迟一小段时间再确认，避免单次检测失败误回退。</summary>
+    private void ScheduleTrayFollowExitConfirm()
+    {
+        if (_trayFollowExitTimer is null)
+        {
+            _trayFollowExitTimer = new System.Windows.Forms.Timer();
+            _trayFollowExitTimer.Tick += (_, _) => ConfirmTrayFollowExit();
+        }
+        _trayFollowExitTimer.Stop();
+        // 至少覆盖一轮监视间隔；最长 5 秒，避免游戏真退出后回退太慢。
+        _trayFollowExitTimer.Interval = GamePollingPolicy.ExitConfirmationIntervalMs(_config.PollIntervalMs);
+        _trayFollowExitTimer.Start();
+    }
+
+    private void ConfirmTrayFollowExit()
+    {
+        _trayFollowExitTimer?.Stop();
+        if (IsDisposed || _reallyExit) return;
+
+        var running = _service.RunningGame ?? _service.AttachedGame;
+        var decision = _trayFollow.ConfirmExit(running, _service.DisplayGame);
+        if (!decision.Switch) return;
+
+        ApplyTrayFollowDecision(decision);
+    }
+
+    private void ApplyTrayFollowDecision(TrayGameFollowState.Decision decision)
+    {
+        _service.SetDisplayGame(decision.Game);
+        AppLog.Info(decision.IsFollow
+            ? $"托盘跟随运行中的游戏 → {GameCatalog.Get(decision.Game).Key}"
+            : $"游戏已退出 — 托盘恢复到 {GameCatalog.Get(decision.Game).Key}");
+        PushUiAndRefreshTray();
+    }
+
+    private void AfterTrayConfigChange(string what)
+    {
+        AppLog.Info($"托盘更改: {what}");
+        PushUiAndRefreshTray();
+    }
+
+    private void PushUiAndRefreshTray()
+    {
+        SyncTrayFromConfig();
+        if (_webReady) _bridge.PushState();
+    }
+
+    private string BuildStatusHeaderText()
+    {
+        var descriptor = ActiveGameDescriptor;
+        var profile = ActiveGameProfile;
+        var effective = _config.MasterEnabled && profile.Enabled;
+        var pid = _service.AttachedPid;
+        if (pid > 0 && _service.AttachedGame == descriptor.Id)
+            return effective
+                ? $"{descriptor.ShortName}  ·  PID {pid}  ·  {profile.TargetFps} FPS"
+                : $"{descriptor.ShortName}  ·  已附加  ·  解锁已关";
+        if (!_config.MasterEnabled) return $"{descriptor.ShortName}  ·  解锁服务已暂停";
+        if (!profile.Enabled)
+            return descriptor.FpsViaRegistry
+                ? $"{descriptor.ShortName}  ·  帧率解锁已关闭（未写注册表）"
+                : $"{descriptor.ShortName}  ·  帧率解锁已关闭  ·  {profile.TargetFps} FPS";
+        if (descriptor.FpsViaRegistry)
+            return $"{descriptor.ShortName}  ·  注册表解锁  ·  固定 {profile.TargetFps} FPS";
+        return $"{descriptor.ShortName}  ·  已就绪  ·  {profile.TargetFps} FPS";
+    }
+
+    /// <summary>
+    /// 托盘悬停提示：首行固定产品名（先让人确认「它是谁」），次行一句可读状态，
+    /// 第三行是当前游戏的画面效果开关与就绪状态。
+    /// 提示总长受 NotifyIcon.Text 限制（63 字符，含换行），因此注入行按「只列已开启
+    /// 的功能 + 附着后带就绪标记」写，最长也留得下。
+    /// </summary>
+    private string BuildTrayTipText()
+    {
+        var descriptor = ActiveGameDescriptor;
+        var profile = ActiveGameProfile;
+        var unlock = _config.MasterEnabled && profile.Enabled;
+        var pid = _service.AttachedPid;
+
+        var feedback = 0;
+        if (pid > 0 && _service.AttachedGame == descriptor.Id)
+        {
+            try { feedback = _service.CurrentFpsFeedback; } catch { /* ignore */ }
+        }
+
+        string status;
+        if (pid > 0 && _service.AttachedGame == descriptor.Id)
+        {
+            status = !unlock
+                ? $"{descriptor.ShortName} 已附着 · 解锁已暂停"
+                : feedback > 0
+                    ? $"{descriptor.ShortName} 当前 {feedback} → 目标 {profile.TargetFps} FPS"
+                    : $"{descriptor.ShortName} 已附着 · 目标 {profile.TargetFps} FPS";
+        }
+        else if (!_config.MasterEnabled)
+        {
+            status = $"{descriptor.ShortName} · 解锁已暂停";
+        }
+        else if (!profile.Enabled)
+        {
+            status = descriptor.FpsViaRegistry
+                ? $"{descriptor.ShortName} · 解锁已关闭"
+                : $"{descriptor.ShortName} · 解锁已关闭 · {profile.TargetFps} FPS";
+        }
+        else if (descriptor.FpsViaRegistry)
+        {
+            status = $"{descriptor.ShortName} · 注册表 {profile.TargetFps} FPS";
+        }
+        else
+        {
+            status = $"{descriptor.ShortName} · 已就绪 · {profile.TargetFps} FPS";
+        }
+
+        var text = AppPaths.ProductDisplayName + Environment.NewLine + status;
+        var injection = BuildInjectionTipLine(pid);
+        if (injection.Length > 0)
+            text += Environment.NewLine + injection;
+
+        return Truncate(text, 63);
+    }
+
+    /// <summary>
+    /// 当前游戏画面效果的一行状态：只列已开启的功能；附着且功能生效时按 Stub 回报的
+    /// 位掩码标注就绪情况（✓ 已就绪 / … 等待适配或尚未生效），未附着时只报配置。
+    /// 总开关关闭时注入不会下发，直接报「注入已暂停」。
+    /// </summary>
+    private string BuildInjectionTipLine(int pid)
+    {
+        var descriptor = ActiveGameDescriptor;
+        var profile = ActiveGameProfile;
+        var anyEnabled = profile.AntiBlurPerspective || profile.HideUid
+                         || (descriptor.SupportsDiveMosaic && profile.AntiBlurDiveMosaic)
+                         || (descriptor.SupportsDof && profile.AntiBlurDof);
+        if (!anyEnabled) return string.Empty;
+
+        var active = _config.MasterEnabled;
+        if (!active) return "注入已暂停";
+
+        var attached = pid > 0 && _service.AttachedGame == descriptor.Id;
+        var antiBlurMask = 0;
+        var hideUidMask = 0;
+        if (attached)
+        {
+            try
+            {
+                antiBlurMask = _service.AntiBlurStateFeedback;
+                hideUidMask = _service.HideUidStateFeedback;
+            }
+            catch { /* 读共享内存失败时按「未就绪」显示，不打断托盘提示 */ }
+        }
+
+        // 位定义见 src/Common/IpcData.h：AntiBlurState bit0=虚化就绪 / bit1=马赛克就绪，
+        // HideUidState bit0=就绪。功能名称按游戏自己的叫法显示。
+        var items = new List<string>(3);
+        if (profile.AntiBlurPerspective)
+            items.Add(FormatInjectionItem("反虚化", attached, (antiBlurMask & 1) != 0));
+        if (descriptor.SupportsDiveMosaic && profile.AntiBlurDiveMosaic)
+            items.Add(FormatInjectionItem("马赛克", attached, (antiBlurMask & 2) != 0));
+        if (descriptor.SupportsDof && profile.AntiBlurDof)
+            items.Add(FormatInjectionItem("景深", attached, (antiBlurMask & 8) != 0));
+        if (profile.HideUid)
+            items.Add(FormatInjectionItem("UID", attached, (hideUidMask & 1) != 0));
+
+        return string.Join(" · ", items);
+    }
+
+    /// <summary>单个注入功能的显示名：未附着不带标记，附着后按就绪情况带 ✓ / …。</summary>
+    private static string FormatInjectionItem(string name, bool attached, bool ready)
+        => !attached ? name : ready ? name + "✓" : name + "…";
+
+    /// <summary>
+    /// 弹一条 Windows 通知（Win10/11 上即操作中心 Toast）。
+    /// 图标固定为信息类型：这些提示只是状态告知，用警告图标会在操作中心里
+    /// 显示成黄色感叹号，让人误以为出了问题。
+    /// </summary>
+    private void ShowTrayBalloon(string title, string text)
+    {
+        try
+        {
+            if (ToastNotifications.TryShow(title, text))
+                return;
+
+            // 旧系统或通知服务被禁用时保留兼容提示，避免状态变化完全无反馈。
+            _tray.BalloonTipTitle = title;
+            _tray.BalloonTipText = text;
+            _tray.BalloonTipIcon = ToolTipIcon.Info;
+            _tray.ShowBalloonTip(2200);
+        }
+        catch { /* ignore */ }
+    }
+
+    /// <summary>
+    /// 托盘菜单 / Web 改配置后：当前游戏、勾选、功能文案、FPS 子菜单、
+    /// 提示全文与状态头全部对齐界面。
+    /// </summary>
+    public void SyncTrayFromConfig()
+    {
+        if (IsDisposed) return;
+
+        void work()
+        {
+            _syncingUi = true;
+            try
+            {
+                var descriptor = ActiveGameDescriptor;
+                var profile = ActiveGameProfile;
+
+                if (_trayStatusItem is not null)
+                    _trayStatusItem.Text = BuildStatusHeaderText();
+
+                if (_trayGameRoot is not null)
+                    _trayGameRoot.Text = $"当前游戏  ·  {descriptor.ShortName}";
+                if (_trayGameGenshinItem is not null)
+                    _trayGameGenshinItem.Checked = _service.DisplayGame == GameId.Genshin;
+                if (_trayGameStarRailItem is not null)
+                    _trayGameStarRailItem.Checked = _service.DisplayGame == GameId.StarRail;
+                if (_trayLaunchItem is not null)
+                    _trayLaunchItem.Text = $"启动{descriptor.DisplayName}";
+
+                if (_trayEnabledItem is not null)
+                {
+                    _trayEnabledItem.Checked = profile.Enabled;
+                    _trayEnabledItem.ToolTipText = descriptor.FpsViaRegistry
+                        ? "开启后检查注册表：已经是 120 FPS 就不覆盖，否则写入 120"
+                        : "开启后按目标帧率注入；关闭则暂停解锁";
+                    // 总开关关闭时仍允许改勾选，但状态头会提示暂停
+                    _trayEnabledItem.Enabled = true;
+                }
+                // 画面效果项：星穹铁道没有「水下马赛克」；反虚化与隐藏 UID 的
+                // 显示名 / 悬停说明两款游戏统一。
+                if (_trayAntiBlurPerspectiveItem is not null)
+                {
+                    _trayAntiBlurPerspectiveItem.Checked = profile.AntiBlurPerspective;
+                    _trayAntiBlurPerspectiveItem.Text = "反角色虚化";
+                    _trayAntiBlurPerspectiveItem.ToolTipText =
+                        "镜头拉近时角色不再透明化" + SoloOnlyNotice(descriptor);
+                }
+                if (_trayAntiBlurDiveMosaicItem is not null)
+                {
+                    _trayAntiBlurDiveMosaicItem.Checked = profile.AntiBlurDiveMosaic;
+                    _trayAntiBlurDiveMosaicItem.Visible = descriptor.SupportsDiveMosaic;
+                    _trayAntiBlurDiveMosaicItem.ToolTipText =
+                        "角色入水时不再显示马赛克虚化" + SoloOnlyNotice(descriptor);
+                }
+                if (_trayAntiBlurDofItem is not null)
+                {
+                    _trayAntiBlurDofItem.Checked = profile.AntiBlurDof;
+                    _trayAntiBlurDofItem.Visible = descriptor.SupportsDof;
+                }
+                if (_trayHideUidItem is not null)
+                {
+                    _trayHideUidItem.Checked = profile.HideUid;
+                    _trayHideUidItem.Text = "隐藏 UID";
+                    _trayHideUidItem.ToolTipText =
+                        "隐藏水印与资料页上的 UID 文本" + SoloOnlyNotice(descriptor);
+                }
+
+                if (_trayFpsRoot is not null)
+                {
+                    _trayFpsRoot.ToolTipText = descriptor.FpsViaRegistry
+                        ? $"注册表：{_service.StarRailRegistryStatus}"
+                        : "选择预设或自定义目标帧率";
+                    if (_trayFpsBuiltFor != _service.DisplayGame)
+                    {
+                        BuildTrayFpsItems();
+                    }
+                    else
+                    {
+                        _trayFpsRoot.Text = descriptor.FpsViaRegistry
+                            ? $"帧率  ·  固定 {profile.TargetFps} FPS"
+                            : $"修改帧率  ·  {profile.TargetFps} FPS";
+                        foreach (ToolStripItem it in _trayFpsRoot.DropDownItems)
+                        {
+                            if (it is not ToolStripMenuItem mi) continue;
+                            // "120 FPS  · 推荐" / "60 FPS"
+                            var txt = mi.Text ?? "";
+                            var numPart = txt.Split(' ')[0];
+                            if (int.TryParse(numPart, out var fps))
+                                mi.Checked = fps == profile.TargetFps;
+                        }
+                    }
+                }
+                UpdateTrayTip();
+            }
+            finally
+            {
+                _syncingUi = false;
+            }
+        }
+
+        if (InvokeRequired) BeginInvoke(work);
+        else work();
+    }
+
+    private void UpdateTrayTip()
+    {
+        try
+        {
+            if (_tray is null) return;
+            _tray.Text = BuildTrayTipText();
+            if (_trayStatusItem is not null && !_syncingUi)
+            {
+                // 仅更新文案，不进 _syncingUi 全量路径时也刷新头
+                _trayStatusItem.Text = BuildStatusHeaderText();
+            }
+        }
+        catch { /* ignore */ }
+    }
+
+    private static string Truncate(string s, int max)
+        => s.Length <= max ? s : s[..(max - 1)] + "…";
+
+}
